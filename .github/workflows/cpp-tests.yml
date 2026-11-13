@@ -6,18 +6,45 @@ run-name: ImpactMap AI C++ Tests - ${{ inputs.request_id || github.run_id }}
 on:
   push:
     branches: [main]
+
   pull_request:
     branches: [main]
+
   workflow_dispatch:
     inputs:
       proposed_code:
-        description: "Proposed C++ code to test"
-        required: false
+        description: "Proposed C++ source code"
+        required: true
         type: string
+
+      source_file:
+        description: "Repository-relative C++ source file"
+        required: true
+        type: string
+
+      test_files:
+        description: "Newline-separated repository-relative test files"
+        required: true
+        type: string
+
+      include_dir:
+        description: "Repository-relative C++ include directory"
+        required: true
+        type: string
+
+      project_name:
+        description: "Selected C++ project name"
+        required: true
+        type: string
+
       request_id:
         description: "Unique request ID"
-        required: false
+        required: true
         type: string
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
   cpp-tests:
@@ -33,20 +60,107 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y g++
 
+      - name: Display Project Details
+        env:
+          PROJECT_NAME: ${{ inputs.project_name }}
+          SOURCE_FILE: ${{ inputs.source_file }}
+        run: |
+          echo "Project: $PROJECT_NAME"
+          echo "Source file: $SOURCE_FILE"
+
+      - name: Validate Project Paths
+        env:
+          SOURCE_FILE: ${{ inputs.source_file }}
+          TEST_FILES: ${{ inputs.test_files }}
+          INCLUDE_DIR: ${{ inputs.include_dir }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+
+          source = os.environ["SOURCE_FILE"]
+          include_dir = os.environ["INCLUDE_DIR"]
+          tests = os.environ["TEST_FILES"].splitlines()
+
+          def validate(path):
+              path = path.strip()
+
+              if not path or path.startswith("/"):
+                  raise SystemExit(f"Invalid path: {path}")
+
+              if re.match(r"^[A-Za-z]:", path):
+                  raise SystemExit(f"Absolute paths are not allowed: {path}")
+
+              if any(part in ("", ".", "..") for part in path.split("/")):
+                  raise SystemExit(f"Invalid path: {path}")
+
+              if not os.path.isfile(path) and path != include_dir:
+                  raise SystemExit(f"File does not exist: {path}")
+
+          validate(source)
+
+          if not os.path.isdir(include_dir):
+              raise SystemExit(f"Include directory does not exist: {include_dir}")
+
+          if not tests:
+              raise SystemExit("No test files provided.")
+
+          for test in tests:
+              validate(test)
+
+          print("All project paths validated.")
+          PY
+
       - name: Apply Proposed Code
-        if: github.event_name == 'workflow_dispatch' && inputs.proposed_code != ''
         env:
           PROPOSED_CODE: ${{ inputs.proposed_code }}
+          SOURCE_FILE: ${{ inputs.source_file }}
         run: |
-          printf '%s' "$PROPOSED_CODE" > sample_projects/EmployeeManagementSystem/src/Salary.cpp
+          python3 - <<'PY'
+          import os
+
+          source = os.environ["SOURCE_FILE"]
+          code = os.environ["PROPOSED_CODE"]
+
+          with open(source, "w", encoding="utf-8") as file:
+              file.write(code)
+
+          print(f"Proposed code applied to {source}")
+          PY
 
       - name: Compile C++ Tests
+        env:
+          SOURCE_FILE: ${{ inputs.source_file }}
+          TEST_FILES: ${{ inputs.test_files }}
+          INCLUDE_DIR: ${{ inputs.include_dir }}
         run: |
-          g++ -std=c++17 \
-            -I sample_projects/EmployeeManagementSystem/include \
-            sample_projects/EmployeeManagementSystem/tests/SalaryTest.cpp \
-            sample_projects/EmployeeManagementSystem/src/Salary.cpp \
-            -o salary_test
+          python3 - <<'PY'
+          import os
+          import shlex
+          import subprocess
+          import sys
+
+          source = os.environ["SOURCE_FILE"]
+          include_dir = os.environ["INCLUDE_DIR"]
+          tests = os.environ["TEST_FILES"].splitlines()
+
+          command = [
+              "g++",
+              "-std=c++17",
+              "-Wall",
+              "-Wextra",
+              "-I", include_dir,
+              *tests,
+              source,
+              "-o", "cpp_test"
+          ]
+
+          print("Compiling:", " ".join(shlex.quote(x) for x in command))
+
+          result = subprocess.run(command)
+
+          sys.exit(result.returncode)
+          PY
 
       - name: Execute C++ Tests
-        run: ./salary_test
+        run: ./cpp_test

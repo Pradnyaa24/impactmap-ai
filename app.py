@@ -7,7 +7,7 @@ from services.project_service import (
     get_all_projects
 )
 
-from modules.cpp_test_runner import run_cpp_tests
+from modules.github_actions_runner import run_github_cpp_tests
 from modules.code_comparator import compare_code
 from modules.mcp_client import analyze_code_impact_via_mcp
 from modules.dependency_visualizer import create_dependency_graph
@@ -173,7 +173,6 @@ if cpp_projects:
         placeholder="Example: calculateSalary"
     )
 
-
     # --------------------------------------------------
     # ORIGINAL AND MODIFIED CODE INPUT
     # --------------------------------------------------
@@ -199,7 +198,6 @@ if cpp_projects:
             height=220,
             key="modified_code"
         )
-
 
     # --------------------------------------------------
     # UNIFIED ANALYSIS BUTTON
@@ -266,7 +264,6 @@ if cpp_projects:
 
                 st.info(comparison["change_summary"])
 
-
                 # --------------------------------------------------
                 # FUNCTION SIGNATURE ANALYSIS
                 # --------------------------------------------------
@@ -281,7 +278,6 @@ if cpp_projects:
 
                     st.success("No function signature changes detected.")
 
-
                 # --------------------------------------------------
                 # RETURN STATEMENT ANALYSIS
                 # --------------------------------------------------
@@ -295,7 +291,6 @@ if cpp_projects:
                 else:
 
                     st.success("No return statement changes detected.")
-
 
                 # --------------------------------------------------
                 # ADDED LINES
@@ -314,7 +309,6 @@ if cpp_projects:
 
                         st.info("No added lines.")
 
-
                 # --------------------------------------------------
                 # REMOVED LINES
                 # --------------------------------------------------
@@ -331,7 +325,6 @@ if cpp_projects:
                     else:
 
                         st.info("No removed lines.")
-
 
                 # --------------------------------------------------
                 # DETAILED CODE DIFFERENCE
@@ -350,9 +343,7 @@ if cpp_projects:
 
                         st.info("No differences found.")
 
-
                 st.divider()
-
 
                 # --------------------------------------------------
                 # STEP 2: MCP CODE IMPACT ANALYSIS
@@ -371,100 +362,351 @@ if cpp_projects:
 
                 st.success("MCP code impact analysis completed!")
 
-
                 # --------------------------------------------------
-                # STEP 3: AUTOMATED C++ TEST EXECUTION
+                # STEP 3: GITHUB ACTIONS C++ TEST EXECUTION
                 # --------------------------------------------------
 
                 st.divider()
 
-                st.subheader("🧪 Automated C++ Test Execution")
+                st.subheader("🧪 GitHub Actions C++ Test Execution")
 
-                with st.spinner("Compiling and running C++ tests..."):
+                st.info(
+                    "The proposed code will be compiled and tested "
+                    "on a GitHub-hosted Linux runner. "
+                    "No local Windows executable will be launched."
+                )
 
-                    test_result = run_cpp_tests(project_path)
+                test_result = {
+                    "status": "ERROR",
+                    "message": "C++ test configuration could not be prepared.",
+                    "run_url": None
+                }
 
-                test_status = test_result["status"]
+                try:
+
+                    # --------------------------------------------------
+                    # PROJECT AND REPOSITORY PATHS
+                    # --------------------------------------------------
+
+                    project_root = os.path.realpath(project_path)
+
+                    repository_root = os.path.realpath(
+                        os.path.dirname(os.path.abspath(__file__))
+                    )
+
+                    def is_inside_directory(path, directory):
+
+                        try:
+
+                            return (
+                                os.path.normcase(
+                                    os.path.commonpath([path, directory])
+                                )
+                                == os.path.normcase(directory)
+                            )
+
+                        except ValueError:
+
+                            return False
+
+                    # GitHub Actions can access committed repository files.
+                    if not is_inside_directory(
+                        project_root,
+                        repository_root
+                    ):
+
+                        raise ValueError(
+                            "The selected project is outside the GitHub "
+                            "repository. Move the project inside the "
+                            "repository before running remote tests."
+                        )
+
+                    # --------------------------------------------------
+                    # RESOLVE MCP FILE PATHS
+                    # --------------------------------------------------
+
+                    def resolve_project_file(file_path):
+
+                        if not file_path:
+                            return None
+
+                        file_path = str(file_path).strip()
+
+                        if not file_path:
+                            return None
+
+                        if os.path.isabs(file_path):
+
+                            candidates = [
+                                os.path.realpath(file_path)
+                            ]
+
+                        else:
+
+                            candidates = [
+                                os.path.realpath(
+                                    os.path.join(project_root, file_path)
+                                ),
+                                os.path.realpath(
+                                    os.path.join(repository_root, file_path)
+                                )
+                            ]
+
+                        for candidate in candidates:
+
+                            if (
+                                is_inside_directory(
+                                    candidate,
+                                    project_root
+                                )
+                                and os.path.isfile(candidate)
+                            ):
+
+                                return candidate
+
+                        return None
+
+                    # --------------------------------------------------
+                    # FIND SOURCE DEFINITION FILE
+                    # --------------------------------------------------
+
+                    source_file = None
+
+                    definition_files = result.get(
+                        "definition_files",
+                        []
+                    )
+
+                    if isinstance(definition_files, str):
+
+                        definition_files = [
+                            definition_files
+                        ]
+
+                    for definition in definition_files:
+
+                        candidate = resolve_project_file(definition)
+
+                        if (
+                            candidate
+                            and candidate.lower().endswith(
+                                (".cpp", ".cc", ".cxx")
+                            )
+                        ):
+
+                            source_file = candidate
+                            break
+
+                    if not source_file:
+
+                        raise ValueError(
+                            "No valid C++ source definition file was found. "
+                            "Please check MCP definition_files."
+                        )
+
+                    # --------------------------------------------------
+                    # FIND RELATED TEST FILES
+                    # --------------------------------------------------
+
+                    resolved_test_files = []
+
+                    related_test_files = result.get(
+                        "test_files",
+                        []
+                    )
+
+                    if isinstance(related_test_files, str):
+
+                        related_test_files = [
+                            related_test_files
+                        ]
+
+                    for test_file in related_test_files:
+
+                        candidate = resolve_project_file(test_file)
+
+                        if (
+                            candidate
+                            and candidate.lower().endswith(
+                                (".cpp", ".cc", ".cxx")
+                            )
+                        ):
+
+                            resolved_test_files.append(candidate)
+
+                    # Remove duplicate test paths.
+                    resolved_test_files = list(
+                        dict.fromkeys(resolved_test_files)
+                    )
+
+                    if not resolved_test_files:
+
+                        raise ValueError(
+                            "No valid C++ test files were found. "
+                            "Please check MCP test_files."
+                        )
+
+                    # --------------------------------------------------
+                    # FIND INCLUDE DIRECTORY
+                    # --------------------------------------------------
+
+                    possible_include_dirs = [
+                        os.path.join(project_root, "include"),
+                        os.path.join(project_root, "inc"),
+                        project_root
+                    ]
+
+                    include_dir = next(
+                        (
+                            directory
+                            for directory in possible_include_dirs
+                            if os.path.isdir(directory)
+                        ),
+                        None
+                    )
+
+                    if not include_dir:
+
+                        raise ValueError(
+                            "No valid C++ include directory was found."
+                        )
+
+                    # --------------------------------------------------
+                    # CONVERT TO GITHUB REPOSITORY-RELATIVE PATHS
+                    # --------------------------------------------------
+
+                    github_source_file = os.path.relpath(
+                        source_file,
+                        repository_root
+                    ).replace("\\", "/")
+
+                    github_test_files = [
+                        os.path.relpath(
+                            path,
+                            repository_root
+                        ).replace("\\", "/")
+                        for path in resolved_test_files
+                    ]
+
+                    github_include_dir = os.path.relpath(
+                        include_dir,
+                        repository_root
+                    ).replace("\\", "/")
+
+                    # --------------------------------------------------
+                    # DISPLAY TEST CONFIGURATION
+                    # --------------------------------------------------
+
+                    st.write(
+                        "**Selected Project:**",
+                        selected_project["project_name"]
+                    )
+
+                    st.write(
+                        "**Changed Function:**",
+                        changed_function
+                    )
+
+                    st.write(
+                        "**Source File:**",
+                        github_source_file
+                    )
+
+                    st.write(
+                        "**Include Directory:**",
+                        github_include_dir
+                    )
+
+                    st.write("**Related Test Files:**")
+
+                    for test_file in github_test_files:
+
+                        st.write("📄", test_file)
+
+                    # --------------------------------------------------
+                    # SUBMIT TO GITHUB ACTIONS
+                    # --------------------------------------------------
+
+                    with st.spinner(
+                        "Submitting proposed code to GitHub Actions..."
+                    ):
+
+                        test_result = run_github_cpp_tests(
+                            proposed_code=modified_code,
+                            source_file=github_source_file,
+                            test_files=github_test_files,
+                            include_dir=github_include_dir,
+                            project_name=selected_project["project_name"]
+                        )
+
+                except Exception as error:
+
+                    test_result = {
+                        "status": "ERROR",
+                        "message": str(error),
+                        "run_url": None
+                    }
+
+                # --------------------------------------------------
+                # DISPLAY TEST RESULT
+                # --------------------------------------------------
+
+                test_status = test_result.get(
+                    "status",
+                    "ERROR"
+                )
 
                 if test_status == "PASSED":
 
                     st.success(
-                        "✅ C++ tests compiled and executed successfully!"
+                        "✅ Proposed C++ code passed GitHub Actions tests!"
                     )
 
                 elif test_status == "FAILED":
 
                     st.error(
-                        "❌ C++ tests executed but one or more tests failed."
-                    )
-
-                elif test_status == "COMPILE_FAILED":
-
-                    st.error("❌ C++ compilation failed.")
-
-                elif test_status == "EXECUTION_BLOCKED":
-
-                    st.warning(
-                        "⚠️ Windows Application Control blocked "
-                        "C++ test execution."
+                        "❌ Proposed C++ code failed GitHub Actions tests."
                     )
 
                 elif test_status == "TIMEOUT":
 
                     st.warning(
-                        "⚠️ C++ test execution timed out."
+                        "⚠️ GitHub Actions execution timed out. "
+                        "Check the workflow run."
                     )
 
                 else:
 
                     st.error(
-                        f"C++ test runner error: {test_result.get('message', 'Unknown error')}"
+                        f"GitHub Actions execution status: {test_status}"
                     )
 
-                st.write("**Test Status:**", test_status)
+                st.write(
+                    "**Remote Test Status:**",
+                    test_status
+                )
 
                 st.write(
                     "**Details:**",
-                    test_result.get("message", "No details available.")
+                    test_result.get(
+                        "message",
+                        "No details available."
+                    )
                 )
 
-                if test_result.get("compile_errors"):
+                if test_result.get("run_url"):
 
-                    with st.expander("Compilation Errors"):
-
-                        st.code(
-                            test_result["compile_errors"],
-                            language="text"
-                        )
-
-                if test_result.get("test_output"):
-
-                    with st.expander("Test Output"):
-
-                        st.code(
-                            test_result["test_output"],
-                            language="text"
-                        )
-
-                if test_result.get("test_errors"):
-
-                    with st.expander("Test Execution Errors"):
-
-                        st.code(
-                            test_result["test_errors"],
-                            language="text"
-                        )
-
-                if test_status == "EXECUTION_BLOCKED":
-
-                    st.info(
-                        "The test executable could not be launched due "
-                        "to Windows security restrictions. The test "
-                        "has not been marked as passed."
+                    st.markdown(
+                        f"[🔗 View GitHub Actions Run]"
+                        f"({test_result['run_url']})"
                     )
 
-                st.divider()
+                st.caption(
+                    "C++ source and related test files are selected "
+                    "dynamically using MCP analysis."
+                )
 
+                st.divider()
 
                 # --------------------------------------------------
                 # STEP 4: CHANGE RISK ANALYSIS
@@ -477,7 +719,6 @@ if cpp_projects:
                 )
 
                 st.subheader("📝 Code Change Risk Details")
-
 
                 # --------------------------------------------------
                 # CODE CHANGE METRICS
@@ -500,7 +741,6 @@ if cpp_projects:
                     risk_result["added_line_count"]
                     + risk_result["removed_line_count"]
                 )
-
 
                 # --------------------------------------------------
                 # RISK AND TEST METRICS
@@ -533,7 +773,6 @@ if cpp_projects:
                     risk_result["test_status"]
                 )
 
-
                 # --------------------------------------------------
                 # RISK LEVEL
                 # --------------------------------------------------
@@ -552,7 +791,6 @@ if cpp_projects:
 
                     st.error("🔴 HIGH RISK")
 
-
                 # --------------------------------------------------
                 # RISK ANALYSIS REASONS
                 # --------------------------------------------------
@@ -562,7 +800,6 @@ if cpp_projects:
                 for reason in risk_result["reasons"]:
 
                     st.write("•", reason)
-
 
                 # --------------------------------------------------
                 # RECOMMENDATION
@@ -582,7 +819,6 @@ if cpp_projects:
 
                 st.divider()
 
-
                 # --------------------------------------------------
                 # STEP 5: MCP INTEGRATION DETAILS
                 # --------------------------------------------------
@@ -600,7 +836,6 @@ if cpp_projects:
                     for tool in mcp_response["available_tools"]:
 
                         st.write("✅", tool)
-
 
                 # --------------------------------------------------
                 # STEP 6: IMPACT SUMMARY
@@ -625,7 +860,6 @@ if cpp_projects:
                     len(result["test_files"])
                 )
 
-
                 # --------------------------------------------------
                 # DEFINITION FILES
                 # --------------------------------------------------
@@ -641,7 +875,6 @@ if cpp_projects:
                 else:
 
                     st.info("No function definition found.")
-
 
                 # --------------------------------------------------
                 # IMPACTED FILES
@@ -659,7 +892,6 @@ if cpp_projects:
 
                     st.info("No dependent files detected.")
 
-
                 # --------------------------------------------------
                 # RELATED TEST FILES
                 # --------------------------------------------------
@@ -675,7 +907,6 @@ if cpp_projects:
                 else:
 
                     st.info("No related test files detected.")
-
 
                 # --------------------------------------------------
                 # STEP 7: DEPENDENCY GRAPH
@@ -697,7 +928,6 @@ if cpp_projects:
                 else:
 
                     st.info("No dependency relationships found.")
-
 
                 # --------------------------------------------------
                 # STEP 8: RAG SEARCH
@@ -727,7 +957,6 @@ if cpp_projects:
 
                     st.info("No related code found.")
 
-
                 # --------------------------------------------------
                 # STEP 9: IMPACT EXPLANATION
                 # --------------------------------------------------
@@ -746,7 +975,6 @@ if cpp_projects:
 
                 st.markdown(explanation)
 
-
                 # --------------------------------------------------
                 # FINAL RESULT
                 # --------------------------------------------------
@@ -760,7 +988,6 @@ if cpp_projects:
             except Exception as error:
 
                 st.error(f"Impact analysis failed: {error}")
-
 
 else:
 
