@@ -1,12 +1,23 @@
 
 name: ImpactMap AI - C++ Tests
 
+run-name: ImpactMap AI C++ Tests - ${{ inputs.request_id || github.run_id }}
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      proposed_code:
+        description: "Proposed C++ code to test"
+        required: false
+        type: string
+      request_id:
+        description: "Unique request ID"
+        required: false
+        type: string
 
 jobs:
   cpp-tests:
@@ -21,6 +32,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y g++
+
+      - name: Apply Proposed Code
+        if: github.event_name == 'workflow_dispatch' && inputs.proposed_code != ''
+        env:
+          PROPOSED_CODE: ${{ inputs.proposed_code }}
+        run: |
+          printf '%s' "$PROPOSED_CODE" > sample_projects/EmployeeManagementSystem/src/Salary.cpp
 
       - name: Compile C++ Tests
         run: |
