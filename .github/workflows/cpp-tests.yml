@@ -1,4 +1,3 @@
-
 name: ImpactMap AI - C++ Tests
 
 run-name: ImpactMap AI C++ Tests - ${{ inputs.request_id || github.run_id }}
@@ -34,6 +33,11 @@ on:
       request_id:
         description: "Unique request ID"
         required: true
+        type: string
+
+      generated_test_code:
+        description: "Optional generated C++ test suite"
+        required: false
         type: string
 
 permissions:
@@ -151,29 +155,20 @@ jobs:
           }
 
           source_dir = selected_source.parent
-
-          # Discover implementation files in the selected source directory.
-          discovered_sources = sorted(
-              source_dir.rglob("*.cpp")
-          )
-
+          discovered_sources = sorted(source_dir.rglob("*.cpp"))
           source_files = []
 
           for path in discovered_sources:
               resolved = str(path.resolve())
 
-              # Do not compile test files twice.
               if resolved in test_files:
                   continue
 
-              # Exclude application entry points to avoid
-              # duplicate main() definitions in unit-test builds.
               if path.name.lower() == "main.cpp":
                   continue
 
               source_files.append(resolved)
 
-          # Always include the selected source file.
           selected_path = str(selected_source)
 
           if selected_path not in source_files:
@@ -196,7 +191,31 @@ jobs:
           print(f"Total source files: {len(source_files)}")
           PY
 
+      - name: Prepare Generated Test Suite
+        env:
+          GENERATED_TEST_CODE: ${{ inputs.generated_test_code }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          code = os.environ.get("GENERATED_TEST_CODE", "")
+
+          if not code.strip():
+              print("No generated test suite was provided.")
+              Path("generated_tests_present.txt").write_text("false", encoding="utf-8")
+          else:
+              output = Path(".impactmap/generated_tests.cpp")
+              output.parent.mkdir(parents=True, exist_ok=True)
+              output.write_text(code, encoding="utf-8")
+              Path("generated_tests_present.txt").write_text("true", encoding="utf-8")
+              print(f"Generated test suite saved to {output}")
+              print(f"Generated test code size: {len(code)} characters")
+          PY
+
       - name: Compile Multi-Source C++ Tests
+        id: compile_existing
+        continue-on-error: true
         env:
           TEST_FILES: ${{ inputs.test_files }}
           INCLUDE_DIR: ${{ inputs.include_dir }}
@@ -210,11 +229,7 @@ jobs:
           include_dir = os.environ["INCLUDE_DIR"]
 
           with open("cpp_sources.txt", encoding="utf-8") as file:
-              source_files = [
-                  line.strip()
-                  for line in file
-                  if line.strip()
-              ]
+              source_files = [line.strip() for line in file if line.strip()]
 
           test_files = [
               path.strip()
@@ -223,23 +238,117 @@ jobs:
           ]
 
           command = [
-              "g++",
-              "-std=c++17",
-              "-Wall",
-              "-Wextra",
-              "-I", include_dir,
-              *test_files,
-              *source_files,
+              "g++", "-std=c++17", "-Wall", "-Wextra",
+              "-I", include_dir, *test_files, *source_files,
               "-o", "cpp_test"
           ]
 
           print("Compiling multiple C++ source files:")
           print(" ".join(shlex.quote(arg) for arg in command))
-
           result = subprocess.run(command)
-
           sys.exit(result.returncode)
           PY
 
-      - name: Execute C++ Tests
+      - name: Execute Existing C++ Tests
+        id: run_existing
+        if: steps.compile_existing.outcome == 'success'
+        continue-on-error: true
         run: ./cpp_test
+
+      - name: Compile Generated C++ Tests
+        id: compile_generated
+        if: hashFiles('.impactmap/generated_tests.cpp') != ''
+        continue-on-error: true
+        env:
+          INCLUDE_DIR: ${{ inputs.include_dir }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import shlex
+          import subprocess
+          import sys
+
+          with open("cpp_sources.txt", encoding="utf-8") as file:
+              source_files = [line.strip() for line in file if line.strip()]
+
+          command = [
+              "g++", "-std=c++17", "-Wall", "-Wextra",
+              "-I", os.environ["INCLUDE_DIR"],
+              ".impactmap/generated_tests.cpp",
+              *source_files,
+              "-o", "generated_cpp_test"
+          ]
+
+          print("Compiling generated C++ tests:")
+          print(" ".join(shlex.quote(arg) for arg in command))
+          result = subprocess.run(command)
+
+          if result.returncode != 0:
+              print("IMPACTMAP_GENERATED_TEST_STATUS=COMPILE_FAILED")
+          sys.exit(result.returncode)
+          PY
+
+      - name: Execute Generated C++ Tests
+        id: run_generated
+        if: steps.compile_generated.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set +e
+          ./generated_cpp_test
+          result=$?
+
+          if [ "$result" -eq 0 ]; then
+            echo "IMPACTMAP_GENERATED_TEST_STATUS=PASSED"
+          else
+            echo "IMPACTMAP_GENERATED_TEST_STATUS=FAILED"
+          fi
+
+          exit "$result"
+
+      - name: Report Generated Test Status
+        if: always()
+        env:
+          GENERATED_PRESENT: ${{ hashFiles('.impactmap/generated_tests.cpp') != '' }}
+          GENERATED_COMPILE_OUTCOME: ${{ steps.compile_generated.outcome }}
+          GENERATED_RUN_OUTCOME: ${{ steps.run_generated.outcome }}
+        run: |
+          if [ "$GENERATED_PRESENT" != "true" ]; then
+            echo "IMPACTMAP_GENERATED_TEST_STATUS=NOT_GENERATED"
+          elif [ "$GENERATED_COMPILE_OUTCOME" != "success" ]; then
+            echo "IMPACTMAP_GENERATED_TEST_STATUS=COMPILE_FAILED"
+          elif [ "$GENERATED_RUN_OUTCOME" = "success" ]; then
+            echo "IMPACTMAP_GENERATED_TEST_STATUS=PASSED"
+          else
+            echo "IMPACTMAP_GENERATED_TEST_STATUS=FAILED"
+          fi
+
+      - name: Final Test Result
+        if: always()
+        env:
+          EXISTING_COMPILE_OUTCOME: ${{ steps.compile_existing.outcome }}
+          EXISTING_RUN_OUTCOME: ${{ steps.run_existing.outcome }}
+          GENERATED_PRESENT: ${{ hashFiles('.impactmap/generated_tests.cpp') != '' }}
+          GENERATED_COMPILE_OUTCOME: ${{ steps.compile_generated.outcome }}
+          GENERATED_RUN_OUTCOME: ${{ steps.run_generated.outcome }}
+        run: |
+          failed=0
+
+          if [ "$EXISTING_COMPILE_OUTCOME" != "success" ] || [ "$EXISTING_RUN_OUTCOME" != "success" ]; then
+            echo "Existing C++ test suite failed."
+            failed=1
+          else
+            echo "Existing C++ test suite passed."
+          fi
+
+          if [ "$GENERATED_PRESENT" = "true" ]; then
+            if [ "$GENERATED_COMPILE_OUTCOME" != "success" ] || [ "$GENERATED_RUN_OUTCOME" != "success" ]; then
+              echo "Generated C++ test suite failed."
+              failed=1
+            else
+              echo "Generated C++ test suite passed."
+            fi
+          else
+            echo "Generated C++ test suite was not provided."
+          fi
+
+          exit "$failed"

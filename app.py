@@ -13,6 +13,7 @@ from modules.mcp_client import analyze_code_impact_via_mcp
 from modules.dependency_visualizer import create_dependency_graph
 from modules.llm_explainer import generate_impact_explanation
 from modules.risk_analyzer import calculate_change_risk
+from modules.test_case_generator import generate_cpp_test_suite
 
 
 # --------------------------------------------------
@@ -199,6 +200,19 @@ if cpp_projects:
             key="modified_code"
         )
 
+    business_requirements = st.text_area(
+        "📋 Business Requirements for Generated Tests",
+        placeholder=(
+            "Example: HRA = 20%, DA = 10%. Total salary = "
+            "basic salary + HRA + DA + bonus."
+        ),
+        height=90,
+        help=(
+            "For the first version, enter explicit HRA and DA percentages. "
+            "Expected results are generated from these requirements, not guessed."
+        )
+    )
+
     # --------------------------------------------------
     # UNIFIED ANALYSIS BUTTON
     # --------------------------------------------------
@@ -236,6 +250,13 @@ if cpp_projects:
                     comparison = compare_code(
                         original_code,
                         modified_code
+                    )
+
+                    generated_test_suite = generate_cpp_test_suite(
+                        original_code=original_code,
+                        modified_code=modified_code,
+                        function_name=changed_function.strip(),
+                        requirements=business_requirements
                     )
 
                 st.success("Code comparison completed!")
@@ -342,6 +363,67 @@ if cpp_projects:
                     else:
 
                         st.info("No differences found.")
+
+                # --------------------------------------------------
+                # AUTOMATIC TEST CASE GENERATION
+                # --------------------------------------------------
+
+                st.subheader("🧪 Automatic Test Case Generation")
+
+                if generated_test_suite["supported"]:
+
+                    st.success(
+                        f"Generated {len(generated_test_suite['test_cases'])} "
+                        "requirement-based C++ test cases."
+                    )
+
+                    st.write(
+                        "**Parsed business rules:** "
+                        f"HRA = {generated_test_suite['hra_percentage']:g}%, "
+                        f"DA = {generated_test_suite['da_percentage']:g}%"
+                    )
+
+                    with st.expander("📄 Preview Generated C++ Tests"):
+                        st.code(
+                            generated_test_suite["code"],
+                            language="cpp"
+                        )
+
+                    st.write("**Generated test scenarios:**")
+                    for case in generated_test_suite["test_cases"]:
+                        st.write(
+                            f"- {case['name']}: basic salary "
+                            f"{case['basic_salary']:g}, bonus "
+                            f"{case['bonus']:g}, expected result "
+                            f"{case['expected']:g}"
+                        )
+
+                    if generated_test_suite["baseline_comparisons"]:
+                        st.write("**Original behavior reference:**")
+                        for item in generated_test_suite["baseline_comparisons"]:
+                            status = (
+                                "behavior differs from the new requirement"
+                                if item["behavior_differs"]
+                                else "matches the new requirement"
+                            )
+                            st.write(
+                                f"- {item['name']}: original reference "
+                                f"{item['original_reference']:g}; new expected "
+                                f"{item['requirement_expected']:g} ({status})"
+                            )
+
+                    st.caption(
+                        "Original behavior values are statically derived from "
+                        "simple arithmetic return expressions. They are reference "
+                        "comparisons, not a second execution of the original binary."
+                    )
+
+                else:
+
+                    st.info(
+                        "Automatic tests were not generated: "
+                        + generated_test_suite["reason"]
+                    )
 
                 st.divider()
 
@@ -636,7 +718,12 @@ if cpp_projects:
                             source_file=github_source_file,
                             test_files=github_test_files,
                             include_dir=github_include_dir,
-                            project_name=selected_project["project_name"]
+                            project_name=selected_project["project_name"],
+                            generated_test_code=(
+                                generated_test_suite["code"]
+                                if generated_test_suite["supported"]
+                                else ""
+                            )
                         )
 
                 except Exception as error:
@@ -712,10 +799,28 @@ if cpp_projects:
                 # STEP 4: CHANGE RISK ANALYSIS
                 # --------------------------------------------------
 
+                generated_test_status = "NOT_GENERATED"
+
+                if generated_test_suite["supported"]:
+                    test_message = str(
+                        test_result.get("message", "")
+                    )
+
+                    if test_status == "PASSED":
+                        generated_test_status = "PASSED"
+                    elif "GENERATED_TEST_FAILURE" in test_message:
+                        generated_test_status = "FAILED"
+                    elif "GENERATED_TEST_PASSED" in test_message:
+                        generated_test_status = "PASSED"
+                    else:
+                        generated_test_status = "NOT_CONFIRMED"
+
                 risk_result = calculate_change_risk(
                     result,
                     comparison,
-                    test_status
+                    test_status,
+                    generated_test_status=generated_test_status,
+                    generated_test_count=len(generated_test_suite["test_cases"])
                 )
 
                 st.subheader("📝 Code Change Risk Details")
@@ -773,6 +878,16 @@ if cpp_projects:
                     risk_result["test_status"]
                 )
 
+                if risk_result["generated_test_count"] > 0:
+                    st.write(
+                        "**Generated Test Cases:**",
+                        risk_result["generated_test_count"]
+                    )
+                    st.write(
+                        "**Generated Test Execution:**",
+                        risk_result["generated_test_status"]
+                    )
+
                 # --------------------------------------------------
                 # RISK LEVEL
                 # --------------------------------------------------
@@ -813,8 +928,9 @@ if cpp_projects:
                 st.caption(
                     "Risk is a heuristic estimate based on dependency "
                     "exposure, definition detection, identified test "
-                    "files, code changes and test execution status. "
-                    "It does not guarantee code safety."
+                    "files, code changes, existing tests and generated "
+                    "requirement-based test results. It does not guarantee "
+                    "code safety."
                 )
 
                 st.divider()
