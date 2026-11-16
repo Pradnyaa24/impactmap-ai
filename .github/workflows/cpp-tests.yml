@@ -4,12 +4,6 @@ name: ImpactMap AI - C++ Tests
 run-name: ImpactMap AI C++ Tests - ${{ inputs.request_id || github.run_id }}
 
 on:
-  push:
-    branches: [main]
-
-  pull_request:
-    branches: [main]
-
   workflow_dispatch:
     inputs:
       proposed_code:
@@ -66,7 +60,7 @@ jobs:
           SOURCE_FILE: ${{ inputs.source_file }}
         run: |
           echo "Project: $PROJECT_NAME"
-          echo "Source file: $SOURCE_FILE"
+          echo "Selected source: $SOURCE_FILE"
 
       - name: Validate Project Paths
         env:
@@ -78,13 +72,15 @@ jobs:
           import os
           import re
 
-          source = os.environ["SOURCE_FILE"]
-          include_dir = os.environ["INCLUDE_DIR"]
-          tests = os.environ["TEST_FILES"].splitlines()
+          source = os.environ["SOURCE_FILE"].strip()
+          include_dir = os.environ["INCLUDE_DIR"].strip()
+          tests = [
+              path.strip()
+              for path in os.environ["TEST_FILES"].splitlines()
+              if path.strip()
+          ]
 
-          def validate(path):
-              path = path.strip()
-
+          def validate_path(path):
               if not path or path.startswith("/"):
                   raise SystemExit(f"Invalid path: {path}")
 
@@ -94,10 +90,14 @@ jobs:
               if any(part in ("", ".", "..") for part in path.split("/")):
                   raise SystemExit(f"Invalid path: {path}")
 
-              if not os.path.isfile(path) and path != include_dir:
-                  raise SystemExit(f"File does not exist: {path}")
+          validate_path(source)
+          validate_path(include_dir)
 
-          validate(source)
+          if not source.endswith(".cpp"):
+              raise SystemExit("Selected source file must be a .cpp file.")
+
+          if not os.path.isfile(source):
+              raise SystemExit(f"Source file does not exist: {source}")
 
           if not os.path.isdir(include_dir):
               raise SystemExit(f"Include directory does not exist: {include_dir}")
@@ -106,7 +106,13 @@ jobs:
               raise SystemExit("No test files provided.")
 
           for test in tests:
-              validate(test)
+              validate_path(test)
+
+              if not test.endswith(".cpp"):
+                  raise SystemExit(f"Test file must be a .cpp file: {test}")
+
+              if not os.path.isfile(test):
+                  raise SystemExit(f"Test file does not exist: {test}")
 
           print("All project paths validated.")
           PY
@@ -128,9 +134,70 @@ jobs:
           print(f"Proposed code applied to {source}")
           PY
 
-      - name: Compile C++ Tests
+      - name: Discover C++ Source Files
         env:
           SOURCE_FILE: ${{ inputs.source_file }}
+          TEST_FILES: ${{ inputs.test_files }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          selected_source = Path(os.environ["SOURCE_FILE"]).resolve()
+          test_files = {
+              str(Path(path.strip()).resolve())
+              for path in os.environ["TEST_FILES"].splitlines()
+              if path.strip()
+          }
+
+          source_dir = selected_source.parent
+
+          # Discover implementation files in the selected source directory.
+          discovered_sources = sorted(
+              source_dir.rglob("*.cpp")
+          )
+
+          source_files = []
+
+          for path in discovered_sources:
+              resolved = str(path.resolve())
+
+              # Do not compile test files twice.
+              if resolved in test_files:
+                  continue
+
+              # Exclude application entry points to avoid
+              # duplicate main() definitions in unit-test builds.
+              if path.name.lower() == "main.cpp":
+                  continue
+
+              source_files.append(resolved)
+
+          # Always include the selected source file.
+          selected_path = str(selected_source)
+
+          if selected_path not in source_files:
+              source_files.append(selected_path)
+
+          source_files = sorted(set(source_files))
+
+          if not source_files:
+              raise SystemExit("No C++ source files discovered.")
+
+          with open("cpp_sources.txt", "w", encoding="utf-8") as file:
+              for source in source_files:
+                  file.write(source + "\n")
+
+          print("Discovered C++ source files:")
+
+          for source in source_files:
+              print(" -", source)
+
+          print(f"Total source files: {len(source_files)}")
+          PY
+
+      - name: Compile Multi-Source C++ Tests
+        env:
           TEST_FILES: ${{ inputs.test_files }}
           INCLUDE_DIR: ${{ inputs.include_dir }}
         run: |
@@ -140,9 +207,20 @@ jobs:
           import subprocess
           import sys
 
-          source = os.environ["SOURCE_FILE"]
           include_dir = os.environ["INCLUDE_DIR"]
-          tests = os.environ["TEST_FILES"].splitlines()
+
+          with open("cpp_sources.txt", encoding="utf-8") as file:
+              source_files = [
+                  line.strip()
+                  for line in file
+                  if line.strip()
+              ]
+
+          test_files = [
+              path.strip()
+              for path in os.environ["TEST_FILES"].splitlines()
+              if path.strip()
+          ]
 
           command = [
               "g++",
@@ -150,12 +228,13 @@ jobs:
               "-Wall",
               "-Wextra",
               "-I", include_dir,
-              *tests,
-              source,
+              *test_files,
+              *source_files,
               "-o", "cpp_test"
           ]
 
-          print("Compiling:", " ".join(shlex.quote(x) for x in command))
+          print("Compiling multiple C++ source files:")
+          print(" ".join(shlex.quote(arg) for arg in command))
 
           result = subprocess.run(command)
 
