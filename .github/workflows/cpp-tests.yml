@@ -321,7 +321,6 @@ jobs:
           else
             echo "IMPACTMAP_GENERATED_TEST_STATUS=FAILED"
           fi
-
       - name: Final Test Result
         if: always()
         env:
@@ -333,22 +332,37 @@ jobs:
         run: |
           failed=0
 
-          if [ "$EXISTING_COMPILE_OUTCOME" != "success" ] || [ "$EXISTING_RUN_OUTCOME" != "success" ]; then
-            echo "Existing C++ test suite failed."
-            failed=1
+          # Determine existing test suite status
+          if [ "$EXISTING_COMPILE_OUTCOME" != "success" ]; then
+            existing_status="COMPILE_FAILED"
+          elif [ "$EXISTING_RUN_OUTCOME" = "success" ]; then
+            existing_status="PASSED"
           else
-            echo "Existing C++ test suite passed."
+            existing_status="FAILED"
           fi
 
-          if [ "$GENERATED_PRESENT" = "true" ]; then
-            if [ "$GENERATED_COMPILE_OUTCOME" != "success" ] || [ "$GENERATED_RUN_OUTCOME" != "success" ]; then
-              echo "Generated C++ test suite failed."
-              failed=1
-            else
-              echo "Generated C++ test suite passed."
-            fi
+          echo "IMPACTMAP_EXISTING_TEST_STATUS=$existing_status"
+
+          # Determine generated test suite status
+          if [ "$GENERATED_PRESENT" != "true" ]; then
+            generated_status="NOT_GENERATED"
+          elif [ "$GENERATED_COMPILE_OUTCOME" != "success" ]; then
+            generated_status="COMPILE_FAILED"
+          elif [ "$GENERATED_RUN_OUTCOME" = "success" ]; then
+            generated_status="PASSED"
           else
-            echo "Generated C++ test suite was not provided."
+            generated_status="FAILED"
+          fi
+
+          echo "IMPACTMAP_GENERATED_TEST_STATUS=$generated_status"
+
+          # Fail workflow if either applicable suite failed
+          if [ "$existing_status" != "PASSED" ]; then
+            failed=1
+          fi
+
+          if [ "$generated_status" != "PASSED" ] && [ "$generated_status" != "NOT_GENERATED" ]; then
+            failed=1
           fi
 
           exit "$failed"

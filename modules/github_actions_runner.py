@@ -25,6 +25,10 @@ API_BASE = (
 )
 
 
+# ============================================================
+# GITHUB API HELPERS
+# ============================================================
+
 def github_headers(token):
     return {
         "Accept": "application/vnd.github+json",
@@ -59,17 +63,16 @@ def github_request(url, method="GET", data=None, token=None):
         return None
 
 
-
 def github_request_bytes(url, token):
     """
     Download GitHub Actions job logs.
 
-    First authenticate with the GitHub API.
-    Then follow its temporary redirect without forwarding
-    the GitHub authorization token to external storage.
+    Authenticate with GitHub first, then follow its temporary
+    redirect without forwarding the GitHub token to external storage.
     """
 
     class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+
         def redirect_request(
             self,
             req,
@@ -97,7 +100,6 @@ def github_request_bytes(url, token):
 
     except urllib.error.HTTPError as error:
 
-        # GitHub normally redirects log downloads to temporary storage.
         if error.code in (301, 302, 303, 307, 308):
 
             redirect_url = error.headers.get("Location")
@@ -107,7 +109,7 @@ def github_request_bytes(url, token):
                     "GitHub returned a log redirect without a download URL."
                 )
 
-            # Do not send GitHub's token to the external storage URL.
+            # Never forward the GitHub token to external storage.
             download_request = urllib.request.Request(
                 redirect_url,
                 method="GET"
@@ -122,9 +124,9 @@ def github_request_bytes(url, token):
         raise
 
 
-    with urllib.request.urlopen(request, timeout=60) as response:
-        return response.read()
-
+# ============================================================
+# REPOSITORY PATH VALIDATION
+# ============================================================
 
 def validate_repo_path(path, field_name):
     """Validate that a path is relative to the GitHub repository."""
@@ -135,7 +137,9 @@ def validate_repo_path(path, field_name):
     path = path.strip().replace("\\", "/")
 
     if path.startswith("/") or re.match(r"^[A-Za-z]:", path):
-        raise ValueError(f"{field_name} must be repository-relative.")
+        raise ValueError(
+            f"{field_name} must be repository-relative."
+        )
 
     parts = path.split("/")
 
@@ -144,6 +148,10 @@ def validate_repo_path(path, field_name):
 
     return path
 
+
+# ============================================================
+# FAILURE ANALYSIS
+# ============================================================
 
 def classify_failure(log_text):
     """Identify the likely category of a C++ build or test failure."""
@@ -166,11 +174,15 @@ def classify_failure(log_text):
         return "COMPILATION ERROR"
 
     if (
-        "generated_test_failure" in text
-        or "assertion `" in text
+        "assertion `" in text
         or "assertion '" in text
         or "assertion failed" in text
         or "assert(" in text
+        or re.search(
+            r"(?m)^\s*GENERATED_TEST_FAILURE:",
+            log_text,
+            re.IGNORECASE
+        )
     ):
         return "UNIT TEST FAILURE"
 
@@ -187,7 +199,7 @@ def classify_failure(log_text):
 
 
 def extract_relevant_log_lines(log_text, max_lines=12):
-    """Extract useful compiler, linker, assertion and runtime messages."""
+    """Extract useful compiler, linker, test and runtime messages."""
 
     patterns = [
         r"fatal error:",
@@ -196,11 +208,11 @@ def extract_relevant_log_lines(log_text, max_lines=12):
         r"multiple definition",
         r"collect2: error",
         r"ld returned",
-        r"generated_test_failure",
-        r"generated_test_passed",
-        r"baseline_reference",
+        r"IMPACTMAP_EXISTING_TEST_STATUS=",
+        r"IMPACTMAP_GENERATED_TEST_STATUS=",
         r"assertion.*failed",
         r"assertion [`']",
+        r"GENERATED_TEST_FAILURE:",
         r"segmentation fault",
         r"core dumped",
         r"terminate called",
@@ -213,11 +225,13 @@ def extract_relevant_log_lines(log_text, max_lines=12):
     lines = log_text.splitlines()
     findings = []
 
-    for index, line in enumerate(lines):
+    for line in lines:
+
         if any(
             re.search(pattern, line, re.IGNORECASE)
             for pattern in patterns
         ):
+
             cleaned = line.strip()
 
             if cleaned and cleaned not in findings:
@@ -229,7 +243,46 @@ def extract_relevant_log_lines(log_text, max_lines=12):
     return findings
 
 
+# ============================================================
+# TEST STATUS EXTRACTION
+# ============================================================
 
+def extract_test_statuses(log_text):
+    """
+    Extract actual existing and generated test statuses
+    from the final GitHub Actions workflow markers.
+    """
+
+    existing_match = re.search(
+        r"IMPACTMAP_EXISTING_TEST_STATUS="
+        r"(PASSED|FAILED|COMPILE_FAILED)",
+        log_text,
+        re.IGNORECASE
+    )
+
+    generated_match = re.search(
+        r"IMPACTMAP_GENERATED_TEST_STATUS="
+        r"(PASSED|FAILED|COMPILE_FAILED|NOT_GENERATED)",
+        log_text,
+        re.IGNORECASE
+    )
+
+    existing_status = (
+        existing_match.group(1).upper()
+        if existing_match else "UNKNOWN"
+    )
+
+    generated_status = (
+        generated_match.group(1).upper()
+        if generated_match else "UNKNOWN"
+    )
+
+    return existing_status, generated_status
+
+
+# ============================================================
+# GITHUB JOB LOG RETRIEVAL
+# ============================================================
 
 def get_failed_job_details(run_id, token):
     """Retrieve failed job steps and analyze ZIP or plain-text logs."""
@@ -269,6 +322,7 @@ def get_failed_job_details(run_id, token):
     for job in failed_jobs:
 
         job_name = job.get("name", "Unknown job")
+
         report.append(f"Failed job: {job_name}")
 
         failed_steps = [
@@ -277,6 +331,7 @@ def get_failed_job_details(run_id, token):
         ]
 
         if failed_steps:
+
             report.append("Failed step(s):")
 
             for step in failed_steps:
@@ -288,10 +343,14 @@ def get_failed_job_details(run_id, token):
         job_id = job.get("id")
 
         if not job_id:
-            report.append("Job ID was not returned by GitHub.")
+            report.append(
+                "Job ID was not returned by GitHub."
+            )
             continue
 
-        logs_url = f"{API_BASE}/actions/jobs/{job_id}/logs"
+        logs_url = (
+            f"{API_BASE}/actions/jobs/{job_id}/logs"
+        )
 
         try:
             log_data = github_request_bytes(
@@ -300,11 +359,15 @@ def get_failed_job_details(run_id, token):
             )
 
             if not log_data:
-                report.append("GitHub returned an empty log response.")
+                report.append(
+                    "GitHub returned an empty log response."
+                )
                 continue
 
             if not isinstance(log_data, bytes):
-                report.append("Invalid log response format.")
+                report.append(
+                    "Invalid log response format."
+                )
                 continue
 
             archive_stream = io.BytesIO(log_data)
@@ -321,8 +384,11 @@ def get_failed_job_details(run_id, token):
                     for filename in archive.namelist():
 
                         if filename.lower().endswith(".txt"):
+
                             try:
-                                content = archive.read(filename).decode(
+                                content = archive.read(
+                                    filename
+                                ).decode(
                                     "utf-8-sig",
                                     errors="replace"
                                 )
@@ -342,12 +408,35 @@ def get_failed_job_details(run_id, token):
                 )
 
             if not combined_logs.strip():
-                report.append("No readable job logs were found.")
+                report.append(
+                    "No readable job logs were found."
+                )
                 continue
 
-            report.append("Job logs retrieved successfully.")
+            report.append(
+                "Job logs retrieved successfully."
+            )
 
-            failure_category = classify_failure(combined_logs)
+            # Preserve actual workflow test status markers.
+            existing_status, generated_status = (
+                extract_test_statuses(combined_logs)
+            )
+
+            if existing_status != "UNKNOWN":
+                report.append(
+                    "IMPACTMAP_EXISTING_TEST_STATUS="
+                    f"{existing_status}"
+                )
+
+            if generated_status != "UNKNOWN":
+                report.append(
+                    "IMPACTMAP_GENERATED_TEST_STATUS="
+                    f"{generated_status}"
+                )
+
+            failure_category = classify_failure(
+                combined_logs
+            )
 
             report.append(
                 f"Detected failure category: {failure_category}"
@@ -358,10 +447,14 @@ def get_failed_job_details(run_id, token):
             )
 
             if findings:
-                report.append("Relevant error details:")
+
+                report.append(
+                    "Relevant error details:"
+                )
 
                 for finding in findings:
                     report.append(f"- {finding}")
+
             else:
                 report.append(
                     "No specific compiler or test error pattern "
@@ -370,12 +463,16 @@ def get_failed_job_details(run_id, token):
 
         except Exception as error:
             report.append(
-                f"Could not download or process job logs: {error}"
+                "Could not download or process job logs: "
+                f"{error}"
             )
 
     return "\n".join(report)
 
 
+# ============================================================
+# MAIN GITHUB ACTIONS TEST RUNNER
+# ============================================================
 
 def run_github_cpp_tests(
     proposed_code,
@@ -394,6 +491,8 @@ def run_github_cpp_tests(
     Returns:
         {
             "status": "...",
+            "existing_test_status": "...",
+            "generated_test_status": "...",
             "message": "...",
             "run_url": "..."
         }
@@ -404,13 +503,19 @@ def run_github_cpp_tests(
     if not token:
         return {
             "status": "ERROR",
-            "message": "GITHUB_TOKEN is missing. Check your .env file.",
+            "existing_test_status": "UNKNOWN",
+            "generated_test_status": "UNKNOWN",
+            "message": (
+                "GITHUB_TOKEN is missing. Check your .env file."
+            ),
             "run_url": None
         }
 
     if not proposed_code or not proposed_code.strip():
         return {
             "status": "ERROR",
+            "existing_test_status": "UNKNOWN",
+            "generated_test_status": "UNKNOWN",
             "message": "Proposed C++ code cannot be empty.",
             "run_url": None
         }
@@ -439,7 +544,9 @@ def run_github_cpp_tests(
             ]
 
         if not test_files:
-            raise ValueError("At least one C++ test file is required.")
+            raise ValueError(
+                "At least one C++ test file is required."
+            )
 
         test_files = [
             validate_repo_path(path, "Test file")
@@ -447,24 +554,34 @@ def run_github_cpp_tests(
         ]
 
         if len(test_files) > 20:
-            raise ValueError("Maximum 20 test files are supported.")
+            raise ValueError(
+                "Maximum 20 test files are supported."
+            )
 
         if not project_name or not project_name.strip():
-            raise ValueError("Project name cannot be empty.")
+            raise ValueError(
+                "Project name cannot be empty."
+            )
 
         if generated_test_code and len(generated_test_code) > 30000:
-            raise ValueError("Generated test code exceeds the 30,000 character limit.")
+            raise ValueError(
+                "Generated test code exceeds the 30,000 character limit."
+            )
 
     except ValueError as error:
         return {
             "status": "ERROR",
+            "existing_test_status": "UNKNOWN",
+            "generated_test_status": "UNKNOWN",
             "message": str(error),
             "run_url": None
         }
 
     request_id = uuid.uuid4().hex
 
-    expected_title = f"ImpactMap AI C++ Tests - {request_id}"
+    expected_title = (
+        f"ImpactMap AI C++ Tests - {request_id}"
+    )
 
     workflow_url = (
         f"{API_BASE}/actions/workflows/"
@@ -506,7 +623,9 @@ def run_github_cpp_tests(
                 token=token
             )
 
-            workflow_runs = response.get("workflow_runs", [])
+            workflow_runs = response.get(
+                "workflow_runs", []
+            )
 
             matching_run = next(
                 (
@@ -522,11 +641,21 @@ def run_github_cpp_tests(
 
                 if matching_run.get("status") == "completed":
 
-                    conclusion = matching_run.get("conclusion")
+                    conclusion = matching_run.get(
+                        "conclusion"
+                    )
 
+                    # Both suites must have succeeded if the
+                    # complete workflow succeeded.
                     if conclusion == "success":
+
                         return {
                             "status": "PASSED",
+                            "existing_test_status": "PASSED",
+                            "generated_test_status": (
+                                "PASSED" if generated_test_code
+                                else "NOT_GENERATED"
+                            ),
                             "message": (
                                 "Proposed C++ code passed "
                                 "GitHub Actions tests."
@@ -541,6 +670,11 @@ def run_github_cpp_tests(
                         token
                     )
 
+                    # Extract separate test suite statuses.
+                    existing_test_status, generated_test_status = (
+                        extract_test_statuses(failure_details)
+                    )
+
                     message = (
                         "GitHub Actions tests failed.\n\n"
                         f"Workflow conclusion: {conclusion}\n\n"
@@ -550,6 +684,8 @@ def run_github_cpp_tests(
 
                     return {
                         "status": "FAILED",
+                        "existing_test_status": existing_test_status,
+                        "generated_test_status": generated_test_status,
                         "message": message,
                         "run_url": run_url
                     }
@@ -558,6 +694,8 @@ def run_github_cpp_tests(
 
         return {
             "status": "TIMEOUT",
+            "existing_test_status": "UNKNOWN",
+            "generated_test_status": "UNKNOWN",
             "message": (
                 "GitHub Actions did not finish within "
                 f"{timeout} seconds. Check the Actions page."
@@ -574,6 +712,8 @@ def run_github_cpp_tests(
 
         return {
             "status": "ERROR",
+            "existing_test_status": "UNKNOWN",
+            "generated_test_status": "UNKNOWN",
             "message": (
                 f"GitHub API error: HTTP {error.code}. {details}"
             ),
@@ -584,6 +724,10 @@ def run_github_cpp_tests(
 
         return {
             "status": "ERROR",
-            "message": f"GitHub testing error: {error}",
+            "existing_test_status": "UNKNOWN",
+            "generated_test_status": "UNKNOWN",
+            "message": (
+                f"GitHub testing error: {error}"
+            ),
             "run_url": None
         }

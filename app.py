@@ -1,5 +1,6 @@
-
 import os
+import re
+from pathlib import Path
 import streamlit as st
 
 from services.project_service import (
@@ -15,6 +16,31 @@ from modules.llm_explainer import generate_impact_explanation
 from modules.risk_analyzer import calculate_change_risk
 from modules.test_case_generator import generate_cpp_test_suite
 
+# --------------------------------------------------
+# PROJECT PATH CONFIGURATION
+# --------------------------------------------------
+
+BASE_DIR = Path(__file__).resolve().parent
+
+
+def resolve_project_path(project_path):
+    if not project_path:
+        return None
+
+    normalized_path = str(project_path).replace("\\", "/")
+
+    # Convert old Windows paths into paths relative to the repository
+    if "impactmap-ai/" in normalized_path:
+        normalized_path = normalized_path.split(
+            "impactmap-ai/", 1
+        )[1]
+
+    candidate_path = Path(normalized_path)
+
+    if not candidate_path.is_absolute():
+        candidate_path = BASE_DIR / candidate_path
+
+    return str(candidate_path.resolve())
 
 # --------------------------------------------------
 # PAGE CONFIGURATION
@@ -26,13 +52,93 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🔍 ImpactMap AI")
-st.subheader("Intelligent Code Change Impact Analyzer")
 
-st.write(
-    "Register your software projects and analyze "
-    "the impact of future code changes."
+st.markdown("""
+<style>
+    .block-container {
+        max-width: 1500px;
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+    }
+
+    h1 {
+        font-size: 2.4rem !important;
+        font-weight: 800 !important;
+        letter-spacing: -1px;
+    }
+
+    h2, h3 {
+        font-weight: 700 !important;
+    }
+
+    [data-testid="stMetric"] {
+        background: rgba(128, 128, 128, 0.08);
+        border: 1px solid rgba(128, 128, 128, 0.22);
+        padding: 16px;
+        border-radius: 12px;
+    }
+
+    [data-testid="stTextArea"] textarea {
+        border-radius: 9px;
+        font-family: monospace;
+        font-size: 13px;
+        line-height: 1.5;
+    }
+
+    [data-testid="stTextInput"] input,
+    [data-testid="stSelectbox"] div[data-baseweb="select"] {
+        border-radius: 8px;
+    }
+
+    [data-testid="stForm"] {
+        border-radius: 12px;
+        padding: 20px;
+    }
+
+    .stButton > button,
+    [data-testid="stFormSubmitButton"] button {
+        border-radius: 8px;
+        font-weight: 650;
+        min-height: 42px;
+        transition: all 0.2s ease;
+    }
+
+    [data-testid="stExpander"] {
+        border-radius: 9px;
+        border: 1px solid rgba(128, 128, 128, 0.22);
+    }
+
+    hr {
+        margin-top: 2rem;
+        margin-bottom: 2rem;
+        opacity: 0.35;
+    }
+
+    [data-testid="stCaptionContainer"] {
+        opacity: 0.8;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+
+st.title("🔍 ImpactMap AI")
+
+st.subheader(
+    "Intelligent Code Change Impact Analyzer"
 )
+
+st.markdown(
+    """
+    Analyze code changes, discover dependencies, generate
+    requirement-based tests, execute C++ tests remotely,
+    and evaluate change risk — all in one place.
+    """
+)
+
+st.caption(
+    "AI-assisted code analysis | MCP | RAG | GitHub Actions"
+)
+
 
 st.divider()
 
@@ -214,16 +320,22 @@ if cpp_projects:
     )
 
     # --------------------------------------------------
+    # --------------------------------------------------
     # UNIFIED ANALYSIS BUTTON
     # --------------------------------------------------
 
     if st.button("🚀 Analyze Code Impact", type="primary"):
 
-        project_path = selected_project["project_path"]
+        project_path = resolve_project_path(
+            selected_project["project_path"]
+        )
 
-        if not os.path.isdir(project_path):
+        if not project_path or not os.path.isdir(project_path):
 
-            st.error("The selected project folder does not exist.")
+            st.error(
+                "The selected project folder does not exist. "
+                "Please check the registered project path."
+            )
 
         elif not changed_function.strip():
 
@@ -799,53 +911,35 @@ if cpp_projects:
                 # STEP 4: CHANGE RISK ANALYSIS
                 # --------------------------------------------------
 
-                generated_test_status = "NOT_GENERATED"
+                # Get individual test suite statuses from GitHub Actions
+                existing_test_status = test_result.get(
+                    "existing_test_status",
+                    test_status
+                )
 
-                if generated_test_suite["supported"]:
-                    test_message = str(
-                        test_result.get("message", "")
+                generated_test_status = test_result.get(
+                    "generated_test_status",
+                    (
+                        "NOT_GENERATED"
+                        if not generated_test_suite["supported"]
+                        else "UNKNOWN"
                     )
+                )
 
-                    if test_status == "PASSED":
-                        generated_test_status = "PASSED"
-                    elif "GENERATED_TEST_FAILURE" in test_message:
-                        generated_test_status = "FAILED"
-                    elif "GENERATED_TEST_PASSED" in test_message:
-                        generated_test_status = "PASSED"
-                    else:
-                        generated_test_status = "NOT_CONFIRMED"
+                # Fallback when individual status is unavailable
+                if existing_test_status == "UNKNOWN":
+                    existing_test_status = test_status
 
                 risk_result = calculate_change_risk(
                     result,
                     comparison,
-                    test_status,
+                    existing_test_status,
                     generated_test_status=generated_test_status,
-                    generated_test_count=len(generated_test_suite["test_cases"])
+                    generated_test_count=len(
+                        generated_test_suite["test_cases"]
+                    )
                 )
 
-                st.subheader("📝 Code Change Risk Details")
-
-                # --------------------------------------------------
-                # CODE CHANGE METRICS
-                # --------------------------------------------------
-
-                col1, col2, col3 = st.columns(3)
-
-                col1.metric(
-                    "Added Lines",
-                    risk_result["added_line_count"]
-                )
-
-                col2.metric(
-                    "Removed Lines",
-                    risk_result["removed_line_count"]
-                )
-
-                col3.metric(
-                    "Total Changed Lines",
-                    risk_result["added_line_count"]
-                    + risk_result["removed_line_count"]
-                )
 
                 # --------------------------------------------------
                 # RISK AND TEST METRICS

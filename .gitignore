@@ -6,3 +6,5 @@ __pycache__/
 impactmap_build/
 .streamlit/secrets.toml
 *.exe
+impactmap_db_backup.sql
+*.sql
