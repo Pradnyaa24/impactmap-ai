@@ -12,6 +12,7 @@ from modules.rag_engine import (
     search_documents
 )
 
+
 mcp = FastMCP("ImpactMap AI")
 
 
@@ -51,26 +52,27 @@ def search_project_knowledge(
 
     index = build_tfidf_index(chunks)
 
-    results = search_documents(
+    return search_documents(
         query,
         index,
         top_k
     )
 
-    return results
+
 @mcp.tool()
 def analyze_code_impact(
     project_path: str,
-    changed_function: str
+    changed_function: str,
+    source_file: str = ""
 ) -> dict:
-    """Analyze the impact of modifying a C++ function."""
+    """Analyze the impact of a changed function in a specific source file."""
 
-    result = analyze_change_impact(
+    return analyze_change_impact(
         project_path,
-        changed_function
+        changed_function,
+        source_file=source_file or None
     )
 
-    return result
 
 if __name__ == "__main__":
     mcp.run()

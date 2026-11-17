@@ -213,6 +213,7 @@ jobs:
               print(f"Generated test code size: {len(code)} characters")
           PY
 
+
       - name: Compile Multi-Source C++ Tests
         id: compile_existing
         continue-on-error: true
@@ -229,7 +230,11 @@ jobs:
           include_dir = os.environ["INCLUDE_DIR"]
 
           with open("cpp_sources.txt", encoding="utf-8") as file:
-              source_files = [line.strip() for line in file if line.strip()]
+              source_files = [
+                  line.strip()
+                  for line in file
+                  if line.strip()
+              ]
 
           test_files = [
               path.strip()
@@ -237,23 +242,80 @@ jobs:
               if path.strip()
           ]
 
-          command = [
-              "g++", "-std=c++17", "-Wall", "-Wextra",
-              "-I", include_dir, *test_files, *source_files,
-              "-o", "cpp_test"
-          ]
+          if not test_files:
+              print("No existing C++ test files were provided.")
+              sys.exit(1)
 
-          print("Compiling multiple C++ source files:")
-          print(" ".join(shlex.quote(arg) for arg in command))
-          result = subprocess.run(command)
-          sys.exit(result.returncode)
+          test_binaries = []
+
+          for index, test_file in enumerate(test_files):
+              binary_name = f"cpp_test_{index}"
+
+              command = [
+                  "g++",
+                  "-std=c++17",
+                  "-Wall",
+                  "-Wextra",
+                  "-I",
+                  include_dir,
+                  test_file,
+                  *source_files,
+                  "-o",
+                  binary_name
+              ]
+
+              print(f"\nCompiling test file: {test_file}")
+              print(" ".join(shlex.quote(arg) for arg in command))
+
+              result = subprocess.run(command)
+
+              if result.returncode != 0:
+                  print(f"Compilation failed: {test_file}")
+                  sys.exit(result.returncode)
+
+              test_binaries.append(binary_name)
+
+          with open("test_binaries.txt", "w", encoding="utf-8") as file:
+              for binary in test_binaries:
+                  file.write(binary + "\n")
+
+          print("\nAll existing test files compiled successfully.")
           PY
 
       - name: Execute Existing C++ Tests
         id: run_existing
         if: steps.compile_existing.outcome == 'success'
         continue-on-error: true
-        run: ./cpp_test
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import sys
+
+          with open("test_binaries.txt", encoding="utf-8") as file:
+              binaries = [
+                  line.strip()
+                  for line in file
+                  if line.strip()
+              ]
+
+          failed = False
+
+          for binary in binaries:
+              print(f"\nExecuting: {binary}")
+
+              result = subprocess.run(["./" + binary])
+
+              if result.returncode != 0:
+                  print(f"Test execution failed: {binary}")
+                  failed = True
+              else:
+                  print(f"Test execution passed: {binary}")
+
+          if failed:
+              sys.exit(1)
+
+          print("\nAll existing C++ test suites passed.")
+          PY
 
       - name: Compile Generated C++ Tests
         id: compile_generated

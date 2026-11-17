@@ -10,7 +10,10 @@ from services.project_service import (
 
 from modules.github_actions_runner import run_github_cpp_tests
 from modules.code_comparator import compare_code
-from modules.mcp_client import analyze_code_impact_via_mcp
+from modules.mcp_client import (
+    analyze_code_impact_via_mcp,
+    scan_cpp_project_via_mcp
+)
 from modules.dependency_visualizer import create_dependency_graph
 from modules.llm_explainer import generate_impact_explanation
 from modules.risk_analyzer import calculate_change_risk
@@ -21,6 +24,15 @@ from modules.test_case_generator import generate_cpp_test_suite
 # --------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent
+
+@st.cache_data(show_spinner=False)
+def get_project_scan(project_path):
+
+    scan_response = scan_cpp_project_via_mcp(
+        project_path
+    )
+
+    return scan_response["scan"]
 
 
 def resolve_project_path(project_path):
@@ -275,10 +287,97 @@ if cpp_projects:
         format_func=lambda project: project["project_name"]
     )
 
-    changed_function = st.text_input(
-        "Function to Modify",
-        placeholder="Example: calculateSalary"
+
+    selected_source_file = None
+    changed_function = ""
+
+    project_path_for_scan = resolve_project_path(
+        selected_project["project_path"]
     )
+
+    if not project_path_for_scan or not os.path.isdir(
+        project_path_for_scan
+    ):
+
+        st.error(
+            "The selected project folder does not exist. "
+            "Please check the registered project path."
+        )
+
+    else:
+
+        st.subheader("Project Source Discovery")
+
+        if st.button("🔄 Refresh Project Scan"):
+
+            get_project_scan.clear()
+
+        try:
+
+            with st.spinner(
+                "Scanning project files and discovering functions..."
+            ):
+
+                project_scan = get_project_scan(
+                    str(project_path_for_scan)
+                )
+
+            source_files = sorted({
+                file.replace("\\", "/")
+                for file in project_scan.get("files", [])
+                if file.lower().endswith(
+                    (".cpp", ".cc", ".cxx")
+                )
+            })
+
+            if not source_files:
+
+                st.warning(
+                    "No C++ source files were found in this project."
+                )
+
+            else:
+
+                selected_source_file = st.selectbox(
+                    "Select Source File",
+                    source_files,
+                    key="selected_source_file"
+                )
+
+                normalized_selected_file = (
+                    selected_source_file.replace("\\", "/").lower()
+                )
+
+                available_functions = sorted({
+                    item["name"]
+                    for item in project_scan.get("functions", [])
+                    if (
+                        item["file"].replace("\\", "/").lower()
+                        == normalized_selected_file
+                    )
+                })
+
+                if available_functions:
+
+                    changed_function = st.selectbox(
+                        "Select Function to Modify",
+                        available_functions,
+                        key="selected_changed_function"
+                    )
+
+                else:
+
+                    st.warning(
+                        "No function definitions were detected "
+                        "in the selected source file."
+                    )
+
+        except Exception as error:
+
+            st.error(
+                f"Project scanning failed: {error}"
+            )
+
 
     # --------------------------------------------------
     # ORIGINAL AND MODIFIED CODE INPUT
@@ -337,9 +436,13 @@ if cpp_projects:
                 "Please check the registered project path."
             )
 
-        elif not changed_function.strip():
+        elif not selected_source_file:
 
-            st.warning("Please enter a function name.")
+            st.warning("Please select a C++ source file.")
+
+        elif not changed_function:
+
+            st.warning("Please select a function.")
 
         elif not original_code.strip():
 
@@ -548,9 +651,10 @@ if cpp_projects:
                 ):
 
                     mcp_response = analyze_code_impact_via_mcp(
-                        project_path,
-                        changed_function.strip()
-                    )
+                    project_path,
+                    changed_function.strip(),
+                    source_file=selected_source_file
+                )
 
                     result = mcp_response["analysis"]
 
@@ -661,35 +765,24 @@ if cpp_projects:
                         return None
 
                     # --------------------------------------------------
-                    # FIND SOURCE DEFINITION FILE
+                    # USE THE USER-SELECTED SOURCE FILE
                     # --------------------------------------------------
 
-                    source_file = None
-
-                    definition_files = result.get(
-                        "definition_files",
-                        []
+                    source_file = resolve_project_file(
+                        selected_source_file
                     )
 
-                    if isinstance(definition_files, str):
+                    if (
+                        not source_file
+                        or not source_file.lower().endswith(
+                            (".cpp", ".cc", ".cxx")
+                        )
+                    ):
 
-                        definition_files = [
-                            definition_files
-                        ]
-
-                    for definition in definition_files:
-
-                        candidate = resolve_project_file(definition)
-
-                        if (
-                            candidate
-                            and candidate.lower().endswith(
-                                (".cpp", ".cc", ".cxx")
-                            )
-                        ):
-
-                            source_file = candidate
-                            break
+                        raise ValueError(
+                            "The selected C++ source file could not "
+                            "be resolved inside the project."
+                        )
 
                     if not source_file:
 

@@ -8,16 +8,12 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 
-# Project root directory
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-# MCP server script
 SERVER_PATH = PROJECT_ROOT / "mcp_server.py"
 
 
 def extract_tool_output(tool_result):
 
-    # Prefer structured MCP output
     structured_data = getattr(
         tool_result,
         "structuredContent",
@@ -27,7 +23,6 @@ def extract_tool_output(tool_result):
     if structured_data is not None:
         return structured_data
 
-    # Fallback: parse JSON from text content
     for item in tool_result.content:
 
         if hasattr(item, "text"):
@@ -43,7 +38,7 @@ def extract_tool_output(tool_result):
     )
 
 
-async def _run_impact_analysis(project_path, changed_function):
+async def _call_mcp_tool(tool_name, arguments):
 
     if not SERVER_PATH.exists():
         raise FileNotFoundError(
@@ -56,17 +51,18 @@ async def _run_impact_analysis(project_path, changed_function):
         cwd=str(PROJECT_ROOT)
     )
 
-    async with stdio_client(server_parameters) as (read_stream, write_stream):
+    async with stdio_client(server_parameters) as (
+        read_stream,
+        write_stream
+    ):
 
         async with ClientSession(
             read_stream,
             write_stream
         ) as session:
 
-            # Initialize MCP connection
             await session.initialize()
 
-            # Retrieve available tools
             tools_response = await session.list_tools()
 
             available_tools = [
@@ -74,39 +70,82 @@ async def _run_impact_analysis(project_path, changed_function):
                 for tool in tools_response.tools
             ]
 
-            if "analyze_code_impact" not in available_tools:
+            if tool_name not in available_tools:
                 raise RuntimeError(
-                    "analyze_code_impact tool is not available."
+                    f"MCP tool '{tool_name}' is not available."
                 )
 
-            # Invoke MCP tool
             tool_result = await session.call_tool(
-                "analyze_code_impact",
-                arguments={
-                    "project_path": str(project_path),
-                    "changed_function": changed_function
-                }
+                tool_name,
+                arguments=arguments
             )
 
             if tool_result.isError:
                 raise RuntimeError(
-                    "MCP tool execution failed: "
+                    f"MCP tool '{tool_name}' failed: "
                     + str(tool_result.content)
                 )
 
-            analysis = extract_tool_output(tool_result)
+            output = extract_tool_output(tool_result)
 
-            return {
-                "analysis": analysis,
-                "available_tools": available_tools
-            }
+            return output, available_tools
 
 
-def analyze_code_impact_via_mcp(project_path, changed_function):
+async def _run_project_scan(project_path):
+
+    output, available_tools = await _call_mcp_tool(
+        "scan_cpp_project",
+        {
+            "project_path": str(project_path)
+        }
+    )
+
+    return {
+        "scan": output,
+        "available_tools": available_tools
+    }
+
+
+async def _run_impact_analysis(
+    project_path,
+    changed_function,
+    source_file=None
+):
+
+    arguments = {
+        "project_path": str(project_path),
+        "changed_function": changed_function,
+        "source_file": source_file or ""
+    }
+
+    output, available_tools = await _call_mcp_tool(
+        "analyze_code_impact",
+        arguments
+    )
+
+    return {
+        "analysis": output,
+        "available_tools": available_tools
+    }
+
+
+def scan_cpp_project_via_mcp(project_path):
+
+    return asyncio.run(
+        _run_project_scan(project_path)
+    )
+
+
+def analyze_code_impact_via_mcp(
+    project_path,
+    changed_function,
+    source_file=None
+):
 
     return asyncio.run(
         _run_impact_analysis(
             project_path,
-            changed_function
+            changed_function,
+            source_file
         )
     )
