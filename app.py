@@ -468,11 +468,12 @@ if cpp_projects:
                     )
 
                     generated_test_suite = generate_cpp_test_suite(
-                        original_code=original_code,
-                        modified_code=modified_code,
-                        function_name=changed_function.strip(),
-                        requirements=business_requirements
-                    )
+                    original_code=original_code,
+                    modified_code=modified_code,
+                    function_name=changed_function.strip(),
+                    requirements=business_requirements,
+                    project_path=project_path
+                )
 
                 st.success("Code comparison completed!")
 
