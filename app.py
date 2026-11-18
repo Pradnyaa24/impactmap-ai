@@ -9,6 +9,7 @@ from services.project_service import (
 )
 
 from modules.github_actions_runner import run_github_cpp_tests
+from modules.external_github_runner import run_external_cpp_tests
 from modules.code_comparator import compare_code
 from modules.mcp_client import (
     analyze_code_impact_via_mcp,
@@ -708,229 +709,279 @@ if cpp_projects:
 
                             return False
 
-                    # GitHub Actions can access committed repository files.
-                    if not is_inside_directory(
-                        project_root,
-                        repository_root
-                    ):
+                    # External ZIP projects are uploaded as temporary release assets.
+                    if not is_inside_directory(project_root, repository_root):
 
-                        raise ValueError(
-                            "The selected project is outside the GitHub "
-                            "repository. Move the project inside the "
-                            "repository before running remote tests."
-                        )
-
-                    # --------------------------------------------------
-                    # RESOLVE MCP FILE PATHS
-                    # --------------------------------------------------
-
-                    def resolve_project_file(file_path):
-
-                        if not file_path:
-                            return None
-
-                        file_path = str(file_path).strip()
-
-                        if not file_path:
-                            return None
-
-                        if os.path.isabs(file_path):
-
-                            candidates = [
-                                os.path.realpath(file_path)
-                            ]
-
-                        else:
-
-                            candidates = [
-                                os.path.realpath(
-                                    os.path.join(project_root, file_path)
-                                ),
-                                os.path.realpath(
-                                    os.path.join(repository_root, file_path)
-                                )
-                            ]
-
-                        for candidate in candidates:
-
+                        def resolve_external_file(file_path):
+                            if not file_path:
+                                return None
+                            raw = str(file_path).strip()
+                            candidate = (
+                                os.path.realpath(raw)
+                                if os.path.isabs(raw)
+                                else os.path.realpath(os.path.join(project_root, raw))
+                            )
                             if (
-                                is_inside_directory(
-                                    candidate,
-                                    project_root
-                                )
+                                is_inside_directory(candidate, project_root)
                                 and os.path.isfile(candidate)
                             ):
-
                                 return candidate
+                            return None
 
-                        return None
+                        external_source = resolve_external_file(selected_source_file)
+                        if not external_source or not external_source.lower().endswith((".cpp", ".cc", ".cxx")):
+                            raise ValueError("Selected source file could not be resolved inside the external project.")
 
-                    # --------------------------------------------------
-                    # USE THE USER-SELECTED SOURCE FILE
-                    # --------------------------------------------------
+                        external_tests = []
+                        for item in result.get("test_files", []) or []:
+                            candidate = resolve_external_file(item)
+                            if candidate and candidate.lower().endswith((".cpp", ".cc", ".cxx")):
+                                external_tests.append(candidate)
+                        external_tests = list(dict.fromkeys(external_tests))
 
-                    source_file = resolve_project_file(
-                        selected_source_file
-                    )
-
-                    if (
-                        not source_file
-                        or not source_file.lower().endswith(
-                            (".cpp", ".cc", ".cxx")
-                        )
-                    ):
-
-                        raise ValueError(
-                            "The selected C++ source file could not "
-                            "be resolved inside the project."
-                        )
-
-                    if not source_file:
-
-                        raise ValueError(
-                            "No valid C++ source definition file was found. "
-                            "Please check MCP definition_files."
+                        external_include = next(
+                            (
+                                directory for directory in (
+                                    os.path.join(project_root, "include"),
+                                    os.path.join(project_root, "inc"),
+                                    project_root
+                                )
+                                if os.path.isdir(directory)
+                            ),
+                            project_root
                         )
 
-                    # --------------------------------------------------
-                    # FIND RELATED TEST FILES
-                    # --------------------------------------------------
+                        st.write("**Selected Project:**", selected_project["project_name"])
+                        st.write("**External Source File:**", os.path.relpath(external_source, project_root).replace("\\\\", "/"))
+                        st.write("**Existing Test Files:**", len(external_tests))
 
-                    resolved_test_files = []
+                        with st.spinner("Uploading external project and running GitHub Actions tests..."):
+                            test_result = run_external_cpp_tests(
+                                project_root=project_root,
+                                proposed_code=modified_code,
+                                source_file=external_source,
+                                test_files=external_tests,
+                                include_dir=external_include,
+                                project_name=selected_project["project_name"],
+                                generated_test_code=(
+                                    generated_test_suite["code"]
+                                    if generated_test_suite["supported"]
+                                    else ""
+                                )
+                            )
 
-                    related_test_files = result.get(
-                        "test_files",
-                        []
-                    )
+                    else:
+                        # --------------------------------------------------
+                        # RESOLVE MCP FILE PATHS
+                        # --------------------------------------------------
 
-                    if isinstance(related_test_files, str):
+                        def resolve_project_file(file_path):
 
-                        related_test_files = [
-                            related_test_files
-                        ]
+                            if not file_path:
+                                return None
 
-                    for test_file in related_test_files:
+                            file_path = str(file_path).strip()
 
-                        candidate = resolve_project_file(test_file)
+                            if not file_path:
+                                return None
+
+                            if os.path.isabs(file_path):
+
+                                candidates = [
+                                    os.path.realpath(file_path)
+                                ]
+
+                            else:
+
+                                candidates = [
+                                    os.path.realpath(
+                                        os.path.join(project_root, file_path)
+                                    ),
+                                    os.path.realpath(
+                                        os.path.join(repository_root, file_path)
+                                    )
+                                ]
+
+                            for candidate in candidates:
+
+                                if (
+                                    is_inside_directory(
+                                        candidate,
+                                        project_root
+                                    )
+                                    and os.path.isfile(candidate)
+                                ):
+
+                                    return candidate
+
+                            return None
+
+                        # --------------------------------------------------
+                        # USE THE USER-SELECTED SOURCE FILE
+                        # --------------------------------------------------
+
+                        source_file = resolve_project_file(
+                            selected_source_file
+                        )
 
                         if (
-                            candidate
-                            and candidate.lower().endswith(
+                            not source_file
+                            or not source_file.lower().endswith(
                                 (".cpp", ".cc", ".cxx")
                             )
                         ):
 
-                            resolved_test_files.append(candidate)
+                            raise ValueError(
+                                "The selected C++ source file could not "
+                                "be resolved inside the project."
+                            )
 
-                    # Remove duplicate test paths.
-                    resolved_test_files = list(
-                        dict.fromkeys(resolved_test_files)
-                    )
+                        if not source_file:
 
-                    if not resolved_test_files:
+                            raise ValueError(
+                                "No valid C++ source definition file was found. "
+                                "Please check MCP definition_files."
+                            )
 
-                        raise ValueError(
-                            "No valid C++ test files were found. "
-                            "Please check MCP test_files."
+                        # --------------------------------------------------
+                        # FIND RELATED TEST FILES
+                        # --------------------------------------------------
+
+                        resolved_test_files = []
+
+                        related_test_files = result.get(
+                            "test_files",
+                            []
                         )
 
-                    # --------------------------------------------------
-                    # FIND INCLUDE DIRECTORY
-                    # --------------------------------------------------
+                        if isinstance(related_test_files, str):
 
-                    possible_include_dirs = [
-                        os.path.join(project_root, "include"),
-                        os.path.join(project_root, "inc"),
-                        project_root
-                    ]
+                            related_test_files = [
+                                related_test_files
+                            ]
 
-                    include_dir = next(
-                        (
-                            directory
-                            for directory in possible_include_dirs
-                            if os.path.isdir(directory)
-                        ),
-                        None
-                    )
+                        for test_file in related_test_files:
 
-                    if not include_dir:
+                            candidate = resolve_project_file(test_file)
 
-                        raise ValueError(
-                            "No valid C++ include directory was found."
+                            if (
+                                candidate
+                                and candidate.lower().endswith(
+                                    (".cpp", ".cc", ".cxx")
+                                )
+                            ):
+
+                                resolved_test_files.append(candidate)
+
+                        # Remove duplicate test paths.
+                        resolved_test_files = list(
+                            dict.fromkeys(resolved_test_files)
                         )
 
-                    # --------------------------------------------------
-                    # CONVERT TO GITHUB REPOSITORY-RELATIVE PATHS
-                    # --------------------------------------------------
+                        if not resolved_test_files:
 
-                    github_source_file = os.path.relpath(
-                        source_file,
-                        repository_root
-                    ).replace("\\", "/")
+                            raise ValueError(
+                                "No valid C++ test files were found. "
+                                "Please check MCP test_files."
+                            )
 
-                    github_test_files = [
-                        os.path.relpath(
-                            path,
+                        # --------------------------------------------------
+                        # FIND INCLUDE DIRECTORY
+                        # --------------------------------------------------
+
+                        possible_include_dirs = [
+                            os.path.join(project_root, "include"),
+                            os.path.join(project_root, "inc"),
+                            project_root
+                        ]
+
+                        include_dir = next(
+                            (
+                                directory
+                                for directory in possible_include_dirs
+                                if os.path.isdir(directory)
+                            ),
+                            None
+                        )
+
+                        if not include_dir:
+
+                            raise ValueError(
+                                "No valid C++ include directory was found."
+                            )
+
+                        # --------------------------------------------------
+                        # CONVERT TO GITHUB REPOSITORY-RELATIVE PATHS
+                        # --------------------------------------------------
+
+                        github_source_file = os.path.relpath(
+                            source_file,
                             repository_root
                         ).replace("\\", "/")
-                        for path in resolved_test_files
-                    ]
 
-                    github_include_dir = os.path.relpath(
-                        include_dir,
-                        repository_root
-                    ).replace("\\", "/")
+                        github_test_files = [
+                            os.path.relpath(
+                                path,
+                                repository_root
+                            ).replace("\\", "/")
+                            for path in resolved_test_files
+                        ]
 
-                    # --------------------------------------------------
-                    # DISPLAY TEST CONFIGURATION
-                    # --------------------------------------------------
+                        github_include_dir = os.path.relpath(
+                            include_dir,
+                            repository_root
+                        ).replace("\\", "/")
 
-                    st.write(
-                        "**Selected Project:**",
-                        selected_project["project_name"]
-                    )
+                        # --------------------------------------------------
+                        # DISPLAY TEST CONFIGURATION
+                        # --------------------------------------------------
 
-                    st.write(
-                        "**Changed Function:**",
-                        changed_function
-                    )
-
-                    st.write(
-                        "**Source File:**",
-                        github_source_file
-                    )
-
-                    st.write(
-                        "**Include Directory:**",
-                        github_include_dir
-                    )
-
-                    st.write("**Related Test Files:**")
-
-                    for test_file in github_test_files:
-
-                        st.write("📄", test_file)
-
-                    # --------------------------------------------------
-                    # SUBMIT TO GITHUB ACTIONS
-                    # --------------------------------------------------
-
-                    with st.spinner(
-                        "Submitting proposed code to GitHub Actions..."
-                    ):
-
-                        test_result = run_github_cpp_tests(
-                            proposed_code=modified_code,
-                            source_file=github_source_file,
-                            test_files=github_test_files,
-                            include_dir=github_include_dir,
-                            project_name=selected_project["project_name"],
-                            generated_test_code=(
-                                generated_test_suite["code"]
-                                if generated_test_suite["supported"]
-                                else ""
-                            )
+                        st.write(
+                            "**Selected Project:**",
+                            selected_project["project_name"]
                         )
+
+                        st.write(
+                            "**Changed Function:**",
+                            changed_function
+                        )
+
+                        st.write(
+                            "**Source File:**",
+                            github_source_file
+                        )
+
+                        st.write(
+                            "**Include Directory:**",
+                            github_include_dir
+                        )
+
+                        st.write("**Related Test Files:**")
+
+                        for test_file in github_test_files:
+
+                            st.write("📄", test_file)
+
+                        # --------------------------------------------------
+                        # SUBMIT TO GITHUB ACTIONS
+                        # --------------------------------------------------
+
+                        with st.spinner(
+                            "Submitting proposed code to GitHub Actions..."
+                        ):
+
+                            test_result = run_github_cpp_tests(
+                                proposed_code=modified_code,
+                                source_file=github_source_file,
+                                test_files=github_test_files,
+                                include_dir=github_include_dir,
+                                project_name=selected_project["project_name"],
+                                generated_test_code=(
+                                    generated_test_suite["code"]
+                                    if generated_test_suite["supported"]
+                                    else ""
+                                )
+                            )
 
                 except Exception as error:
 
