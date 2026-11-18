@@ -1,0 +1,228 @@
+name: ImpactMap AI - External C++ Tests
+
+run-name: ImpactMap External C++ Tests - \${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id: { required: true, type: string }
+      project_name: { required: true, type: string }
+      release_id: { required: true, type: string }
+      asset_id: { required: true, type: string }
+      source_file: { required: true, type: string }
+      include_dir: { required: true, type: string }
+      test_files: { required: false, type: string }
+      proposed_code: { required: true, type: string }
+      generated_test_code: { required: false, type: string }
+
+permissions:
+  contents: read
+
+jobs:
+  external-cpp-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download and safely extract external project
+        env:
+          GH_TOKEN: \${{ github.token }}
+          ASSET_ID: \${{ inputs.asset_id }}
+        run: |
+          python3 - <<'PY'
+          import os, urllib.request, zipfile, io
+          from pathlib import PurePosixPath, Path
+
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/Pradnyaa24/impactmap-ai/releases/assets/{os.environ['ASSET_ID']}",
+              headers={
+                  "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                  "Accept": "application/octet-stream",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=90) as response:
+                  data = response.read()
+          except Exception as exc:
+              raise SystemExit(f"Could not download external project asset: {exc}")
+
+          if len(data) > 100 * 1024 * 1024:
+              raise SystemExit("External project archive exceeds 100 MB.")
+
+          target = Path("external_project").resolve()
+          target.mkdir(parents=True, exist_ok=True)
+          total = count = 0
+          with zipfile.ZipFile(io.BytesIO(data)) as archive:
+              for info in archive.infolist():
+                  name = info.filename.replace("\\", "/")
+                  member = PurePosixPath(name)
+                  if member.is_absolute() or ".." in member.parts or not member.parts:
+                      raise SystemExit(f"Unsafe ZIP path: {name}")
+                  if info.is_dir():
+                      continue
+                  total += info.file_size
+                  count += 1
+                  if total > 500 * 1024 * 1024 or count > 10000:
+                      raise SystemExit("External project exceeds extraction limits.")
+                  destination = (target / Path(*member.parts)).resolve()
+                  if target not in destination.parents:
+                      raise SystemExit(f"ZIP path escapes extraction folder: {name}")
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  with archive.open(info) as src, destination.open("wb") as dst:
+                      dst.write(src.read())
+          print(f"Extracted {count} files ({total} bytes).")
+          PY
+
+      - name: Apply proposed source code
+        env:
+          SOURCE_FILE: \${{ inputs.source_file }}
+          PROPOSED_CODE: \${{ inputs.proposed_code }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path, PurePosixPath
+          root = Path("external_project").resolve()
+          rel = PurePosixPath(os.environ["SOURCE_FILE"])
+          if rel.is_absolute() or ".." in rel.parts:
+              raise SystemExit("Invalid selected source path.")
+          target = (root / Path(*rel.parts)).resolve()
+          if root not in target.parents or target.suffix.lower() not in (".cpp", ".cc", ".cxx"):
+              raise SystemExit("Selected source path is invalid.")
+          if not target.is_file():
+              raise SystemExit(f"Selected source file not found: {rel}")
+          target.write_text(os.environ["PROPOSED_CODE"], encoding="utf-8")
+          print(f"Applied proposed code to {rel}")
+          PY
+
+      - name: Prepare test inputs and generated test suite
+        env:
+          TEST_FILES: \${{ inputs.test_files }}
+          GENERATED_TEST_CODE: \${{ inputs.generated_test_code }}
+          INCLUDE_DIR: \${{ inputs.include_dir }}
+          SOURCE_FILE: \${{ inputs.source_file }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path, PurePosixPath
+          root = Path("external_project").resolve()
+          def safe_path(raw):
+              rel = PurePosixPath(raw.strip())
+              if rel.is_absolute() or ".." in rel.parts or not rel.parts:
+                  raise SystemExit(f"Invalid project path: {raw}")
+              path = (root / Path(*rel.parts)).resolve()
+              if root not in path.parents and path != root:
+                  raise SystemExit(f"Path escapes project: {raw}")
+              return path
+          include_dir = safe_path(os.environ["INCLUDE_DIR"])
+          if not include_dir.is_dir():
+              include_dir = root
+          tests = []
+          for raw in os.environ.get("TEST_FILES", "").splitlines():
+              if raw.strip():
+                  path = safe_path(raw)
+                  if not path.is_file() or path.suffix.lower() not in (".cpp", ".cc", ".cxx"):
+                      raise SystemExit(f"Invalid test file: {raw}")
+                  tests.append(path)
+          source = safe_path(os.environ["SOURCE_FILE"])
+          all_sources = []
+          for path in root.rglob("*"):
+              if path.is_file() and path.suffix.lower() in (".cpp", ".cc", ".cxx"):
+                  if path not in tests and path != source and path.name.lower() != "main.cpp":
+                      all_sources.append(path)
+          all_sources = sorted(set(all_sources + [source]))
+          Path("include_dir.txt").write_text(str(include_dir), encoding="utf-8")
+          Path("test_files.txt").write_text("\n".join(map(str, tests)), encoding="utf-8")
+          Path("source_files.txt").write_text("\n".join(map(str, all_sources)), encoding="utf-8")
+          code = os.environ.get("GENERATED_TEST_CODE", "")
+          if code.strip():
+              Path("generated_tests.cpp").write_text(code, encoding="utf-8")
+          print(f"Discovered {len(all_sources)} implementation sources and {len(tests)} existing test files.")
+          if not tests:
+              print("No existing tests; generated tests can still run.")
+          PY
+
+      - name: Compile and execute existing tests
+        id: existing
+        continue-on-error: true
+        run: |
+          python3 - <<'PY'
+          import subprocess, sys
+          from pathlib import Path
+          tests = [x for x in Path("test_files.txt").read_text().splitlines() if x]
+          sources = [x for x in Path("source_files.txt").read_text().splitlines() if x]
+          include_dir = Path("include_dir.txt").read_text()
+          if not tests:
+              print("IMPACTMAP_EXISTING_TEST_STATUS=NOT_AVAILABLE")
+              sys.exit(0)
+          for index, test in enumerate(tests):
+              binary = f"existing_test_{index}"
+              cmd = ["g++", "-std=c++17", "-Wall", "-Wextra", "-I", include_dir, test, *sources, "-o", binary]
+              print("Compile:", " ".join(cmd))
+              result = subprocess.run(cmd)
+              if result.returncode:
+                  print("IMPACTMAP_EXISTING_TEST_STATUS=COMPILE_FAILED")
+                  sys.exit(result.returncode)
+              result = subprocess.run(["./" + binary])
+              if result.returncode:
+                  print("IMPACTMAP_EXISTING_TEST_STATUS=FAILED")
+                  sys.exit(result.returncode)
+          print("IMPACTMAP_EXISTING_TEST_STATUS=PASSED")
+          PY
+
+      - name: Compile generated tests
+        id: generated_compile
+        if: hashFiles('generated_tests.cpp') != ''
+        continue-on-error: true
+        run: |
+          python3 - <<'PY'
+          import subprocess, sys
+          from pathlib import Path
+          sources = [x for x in Path("source_files.txt").read_text().splitlines() if x]
+          include_dir = Path("include_dir.txt").read_text()
+          cmd = ["g++", "-std=c++17", "-Wall", "-Wextra", "-I", include_dir, "generated_tests.cpp", *sources, "-o", "generated_test"]
+          result = subprocess.run(cmd)
+          if result.returncode:
+              print("IMPACTMAP_GENERATED_TEST_STATUS=COMPILE_FAILED")
+          sys.exit(result.returncode)
+          PY
+
+      - name: Execute generated tests
+        id: generated_run
+        if: steps.generated_compile.outcome == 'success'
+        continue-on-error: true
+        run: |
+          ./generated_test
+          result=$?
+          if [ "$result" -eq 0 ]; then
+            echo "IMPACTMAP_GENERATED_TEST_STATUS=PASSED"
+          else
+            echo "IMPACTMAP_GENERATED_TEST_STATUS=FAILED"
+          fi
+          exit "$result"
+
+      - name: Final test summary
+        if: always()
+        env:
+          EXISTING_OUTCOME: \${{ steps.existing.outcome }}
+          GENERATED_PRESENT: \${{ hashFiles('generated_tests.cpp') != '' }}
+          GENERATED_COMPILE: \${{ steps.generated_compile.outcome }}
+          GENERATED_RUN: \${{ steps.generated_run.outcome }}
+        run: |
+          if [ "$EXISTING_OUTCOME" = "success" ]; then
+            existing_status="PASSED_OR_NOT_AVAILABLE"
+          else
+            existing_status="FAILED"
+          fi
+          if [ "$GENERATED_PRESENT" != "true" ]; then
+            generated_status="NOT_GENERATED"
+          elif [ "$GENERATED_COMPILE" != "success" ]; then
+            generated_status="COMPILE_FAILED"
+          elif [ "$GENERATED_RUN" = "success" ]; then
+            generated_status="PASSED"
+          else
+            generated_status="FAILED"
+          fi
+          echo "IMPACTMAP_EXISTING_TEST_STATUS=$existing_status"
+          echo "IMPACTMAP_GENERATED_TEST_STATUS=$generated_status"
+          if [ "$existing_status" = "FAILED" ] || { [ "$GENERATED_PRESENT" = "true" ] && [ "$generated_status" != "PASSED" ]; }; then
+            exit 1
+          fi
