@@ -1,6 +1,6 @@
 name: ImpactMap AI - External C++ Tests
 
-run-name: ImpactMap External C++ Tests - \${{ inputs.request_id }}
+run-name: ImpactMap External C++ Tests - ${{ inputs.request_id }}
 
 on:
   workflow_dispatch:
@@ -24,8 +24,8 @@ jobs:
     steps:
       - name: Download and safely extract external project
         env:
-          GH_TOKEN: \${{ github.token }}
-          ASSET_ID: \${{ inputs.asset_id }}
+          GH_TOKEN: ${{ secrets.IMPACTMAP_GITHUB_TOKEN }}
+          ASSET_ID: ${{ inputs.asset_id }}
         run: |
           python3 - <<'PY'
           import os, urllib.request, zipfile, io
@@ -74,8 +74,8 @@ jobs:
 
       - name: Apply proposed source code
         env:
-          SOURCE_FILE: \${{ inputs.source_file }}
-          PROPOSED_CODE: \${{ inputs.proposed_code }}
+          SOURCE_FILE: ${{ inputs.source_file }}
+          PROPOSED_CODE: ${{ inputs.proposed_code }}
         run: |
           python3 - <<'PY'
           import os
@@ -95,10 +95,10 @@ jobs:
 
       - name: Prepare test inputs and generated test suite
         env:
-          TEST_FILES: \${{ inputs.test_files }}
-          GENERATED_TEST_CODE: \${{ inputs.generated_test_code }}
-          INCLUDE_DIR: \${{ inputs.include_dir }}
-          SOURCE_FILE: \${{ inputs.source_file }}
+          TEST_FILES: ${{ inputs.test_files }}
+          GENERATED_TEST_CODE: ${{ inputs.generated_test_code }}
+          INCLUDE_DIR: ${{ inputs.include_dir }}
+          SOURCE_FILE: ${{ inputs.source_file }}
         run: |
           python3 - <<'PY'
           import os
@@ -202,10 +202,10 @@ jobs:
       - name: Final test summary
         if: always()
         env:
-          EXISTING_OUTCOME: \${{ steps.existing.outcome }}
-          GENERATED_PRESENT: \${{ hashFiles('generated_tests.cpp') != '' }}
-          GENERATED_COMPILE: \${{ steps.generated_compile.outcome }}
-          GENERATED_RUN: \${{ steps.generated_run.outcome }}
+          EXISTING_OUTCOME: ${{ steps.existing.outcome }}
+          GENERATED_PRESENT: ${{ hashFiles('generated_tests.cpp') != '' }}
+          GENERATED_COMPILE: ${{ steps.generated_compile.outcome }}
+          GENERATED_RUN: ${{ steps.generated_run.outcome }}
         run: |
           if [ "$EXISTING_OUTCOME" = "success" ]; then
             existing_status="PASSED_OR_NOT_AVAILABLE"

@@ -8,3 +8,4 @@ impactmap_build/
 *.exe
 impactmap_db_backup.sql
 *.sql
+uploaded_projects/

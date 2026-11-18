@@ -8,6 +8,8 @@ from services.project_service import (
     get_all_projects
 )
 
+from modules.project_zip_handler import extract_cpp_project_zip
+from modules.project_detector import detect_cpp_project_structure
 from modules.github_actions_runner import run_github_cpp_tests
 from modules.external_github_runner import run_external_cpp_tests
 from modules.code_comparator import compare_code
@@ -162,6 +164,18 @@ st.divider()
 
 st.header("Register New Project")
 
+st.subheader("Upload an External C++ Project")
+
+uploaded_zip = st.file_uploader(
+    "Upload C++ Project ZIP (optional)",
+    type=["zip"],
+    help="Upload a ZIP file containing your C++ project. Maximum size: 100 MB."
+)
+
+st.caption(
+    "You can upload a ZIP file or enter an existing project folder path below."
+)
+
 with st.form("project_form"):
 
     project_name = st.text_input("Project Name")
@@ -171,7 +185,8 @@ with st.form("project_form"):
     )
 
     project_path = st.text_input(
-        "Project Folder Path"
+        "Project Folder Path",
+        help="Required only when you are not uploading a ZIP file."
     )
 
     programming_language = st.selectbox(
@@ -187,18 +202,42 @@ with st.form("project_form"):
 
             st.error("Please enter a project name.")
 
-        elif not project_path.strip():
+        elif uploaded_zip is None and not project_path.strip():
 
-            st.error("Please enter the project folder path.")
+            st.error(
+                "Please upload a ZIP file or enter the project folder path."
+            )
+
+        elif uploaded_zip is not None and programming_language != "C++":
+
+            st.error(
+                "ZIP upload currently supports C++ projects only. "
+                "Please select C++."
+            )
 
         else:
 
             try:
 
+                if uploaded_zip is not None:
+
+                    with st.spinner("Extracting C++ project ZIP..."):
+
+                        extraction_result = extract_cpp_project_zip(
+                            uploaded_zip,
+                            BASE_DIR / "uploaded_projects"
+                        )
+
+                    project_path_to_save = extraction_result["project_path"]
+
+                else:
+
+                    project_path_to_save = project_path.strip()
+
                 project_id = create_project(
-                    project_name,
+                    project_name.strip(),
                     project_description,
-                    project_path,
+                    project_path_to_save,
                     programming_language
                 )
 
@@ -206,12 +245,35 @@ with st.form("project_form"):
                     f"Project registered successfully! ID: {project_id}"
                 )
 
+                if uploaded_zip is not None:
+
+                    st.success("External C++ ZIP project extracted successfully.")
+
+                    st.write(
+                        "Extracted files:",
+                        extraction_result["file_count"]
+                    )
+
+                    st.write(
+                        "C++ files discovered:",
+                        extraction_result["cpp_file_count"]
+                    )
+
+                    st.write("Discovered C++ files:")
+
+                    for cpp_file in extraction_result["cpp_files"]:
+                        st.write(f"- {cpp_file}")
+
+                st.info(
+                    "Your project is now registered. "
+                    "You can select it in Code Impact Analysis."
+                )
+
             except Exception as error:
 
-                st.error(f"Registration failed: {error}")
-
-
-st.divider()
+                st.error(
+                    f"Error registering project: {error}"
+                )
 
 
 # --------------------------------------------------
@@ -291,6 +353,7 @@ if cpp_projects:
 
     selected_source_file = None
     changed_function = ""
+    detected_project_root = None
 
     project_path_for_scan = resolve_project_path(
         selected_project["project_path"]
@@ -315,12 +378,96 @@ if cpp_projects:
 
         try:
 
+            # STEP 1: AUTOMATIC PROJECT STRUCTURE DETECTION
+
+            with st.spinner("Detecting project structure..."):
+                project_structure = detect_cpp_project_structure(
+                    project_path_for_scan
+                )
+
+            detected_project_root = os.path.realpath(
+                project_structure["project_root"]
+            )
+
+            if not os.path.isdir(detected_project_root):
+                raise FileNotFoundError(
+                    "The detected C++ project root does not exist: "
+                    f"{detected_project_root}"
+                )
+
+            st.success("Project structure detected successfully!")
+            st.write(
+                "**Detected Project Root:**",
+                detected_project_root               
+            )
+
+            metric1, metric2, metric3, metric4 = st.columns(4)
+            metric1.metric("Total Files", project_structure["total_files"])
+            metric2.metric("Source Files", len(project_structure["source_files"]))
+            metric3.metric("Header Files", len(project_structure["header_files"]))
+            metric4.metric("Test Files", len(project_structure["test_files"]))
+
+            st.write(
+                "**Build System:**",
+                ", ".join(project_structure["build_systems"])
+            )
+            st.write(
+                "**Entry Points:**",
+                ", ".join(project_structure["entry_points"])
+                if project_structure["entry_points"] else "Not detected"
+            )
+
+            with st.expander("View Complete Detected Project Structure"):
+
+                st.markdown("**Source Files**")
+                st.code(
+                "\n".join(project_structure["source_files"])
+                or "None detected"
+                )
+
+                st.markdown("**Header Files**")
+                st.code(
+                    "\n".join(project_structure["header_files"])
+                    or "None detected"
+                )
+
+                st.markdown("**Test Files**")
+                st.code(
+                    "\n".join(project_structure["test_files"])
+                    or "None detected"
+                )
+
+                st.markdown("**Source Directories**")
+                st.code(
+                    "\n".join(project_structure["source_directories"])
+                    or "None detected"
+                )
+
+                st.markdown("**Include Directories**")
+                st.code(
+                    "\n".join(project_structure["include_directories"])
+                    or "None detected"
+                )
+
+                st.markdown("**Test Directories**")
+                st.code(
+                    "\n".join(project_structure["test_directories"])
+                    or "None detected"
+                )
+
+                st.markdown("**Build Configuration Files**")
+                st.code(
+                    "\n".join(project_structure["build_files"])
+                    or "None detected"
+                )
+
+            # STEP 2: EXISTING MCP PROJECT SCANNING
             with st.spinner(
                 "Scanning project files and discovering functions..."
             ):
 
                 project_scan = get_project_scan(
-                    str(project_path_for_scan)
+                    detected_project_root
                 )
 
             source_files = sorted({
@@ -342,12 +489,17 @@ if cpp_projects:
                 selected_source_file = st.selectbox(
                     "Select Source File",
                     source_files,
-                    key="selected_source_file"
+                    key=f"selected_source_file_{selected_project['id']}"
                 )
 
                 normalized_selected_file = (
                     selected_source_file.replace("\\", "/").lower()
                 )
+
+                class_names = {
+                    item["name"]
+                    for item in project_scan.get("classes", [])
+                }
 
                 available_functions = sorted({
                     item["name"]
@@ -355,6 +507,7 @@ if cpp_projects:
                     if (
                         item["file"].replace("\\", "/").lower()
                         == normalized_selected_file
+                        and item["name"] not in class_names
                     )
                 })
 
@@ -363,7 +516,10 @@ if cpp_projects:
                     changed_function = st.selectbox(
                         "Select Function to Modify",
                         available_functions,
-                        key="selected_changed_function"
+                        key=(
+                            f"selected_changed_function_{selected_project['id']}_"
+                            f"{normalized_selected_file}"
+                        )
                     )
 
                 else:
@@ -372,12 +528,10 @@ if cpp_projects:
                         "No function definitions were detected "
                         "in the selected source file."
                     )
-
+                    
         except Exception as error:
-
-            st.error(
-                f"Project scanning failed: {error}"
-            )
+                st.error(f"Project scanning failed: {error}")
+                st.exception(error)
 
 
     # --------------------------------------------------
@@ -394,7 +548,10 @@ if cpp_projects:
             "📝 Original Code",
             placeholder="Paste existing C++ function here...",
             height=220,
-            key="original_code"
+            key=(
+                f"original_code_{selected_project['id']}_"
+                f"{selected_source_file}_{changed_function}"
+            )
         )
 
     with col2:
@@ -403,7 +560,10 @@ if cpp_projects:
             "✨ Modified Code",
             placeholder="Paste proposed C++ function here...",
             height=220,
-            key="modified_code"
+            key=(
+                f"modified_code_{selected_project['id']}_"
+                f"{selected_source_file}_{changed_function}"
+            )
         )
 
     business_requirements = st.text_area(
@@ -426,9 +586,7 @@ if cpp_projects:
 
     if st.button("🚀 Analyze Code Impact", type="primary"):
 
-        project_path = resolve_project_path(
-            selected_project["project_path"]
-        )
+        project_path = detected_project_root
 
         if not project_path or not os.path.isdir(project_path):
 
@@ -469,12 +627,12 @@ if cpp_projects:
                     )
 
                     generated_test_suite = generate_cpp_test_suite(
-                    original_code=original_code,
-                    modified_code=modified_code,
-                    function_name=changed_function.strip(),
-                    requirements=business_requirements,
-                    project_path=project_path
-                )
+                        original_code=original_code,
+                        modified_code=modified_code,
+                        function_name=changed_function.strip(),
+                        requirements=business_requirements,
+                        project_path=project_path
+                    )
 
                 st.success("Code comparison completed!")
 
@@ -594,35 +752,63 @@ if cpp_projects:
                         "requirement-based C++ test cases."
                     )
 
-                    st.write(
-                        "**Parsed business rules:** "
-                        f"HRA = {generated_test_suite['hra_percentage']:g}%, "
-                        f"DA = {generated_test_suite['da_percentage']:g}%"
-                    )
+                    # Display salary rules only for salary-based generators.
+                    if (
+                        "hra_percentage" in generated_test_suite
+                        and "da_percentage" in generated_test_suite
+                    ):
+                        st.write(
+                            "**Parsed business rules:** "
+                            f"HRA = {generated_test_suite['hra_percentage']:g}%, "
+                            f"DA = {generated_test_suite['da_percentage']:g}%"
+                        )
 
-                    with st.expander("📄 Preview Generated C++ Tests"):
+                    with st.expander("Preview Generated C++ Tests"):
                         st.code(
                             generated_test_suite["code"],
                             language="cpp"
                         )
 
                     st.write("**Generated test scenarios:**")
-                    for case in generated_test_suite["test_cases"]:
-                        st.write(
-                            f"- {case['name']}: basic salary "
-                            f"{case['basic_salary']:g}, bonus "
-                            f"{case['bonus']:g}, expected result "
-                            f"{case['expected']:g}"
-                        )
 
-                    if generated_test_suite["baseline_comparisons"]:
+                    for case in generated_test_suite["test_cases"]:
+
+                        if "employee_id" in case:
+                            st.write(
+                                f"- {case['name']}: employee ID "
+                                f"{case['employee_id']}, expected result "
+                                f"{case['expected']}"
+                            )
+
+                        elif (
+                            "basic_salary" in case
+                            and "bonus" in case
+                        ):
+                            st.write(
+                                f"- {case['name']}: basic salary "
+                                f"{case['basic_salary']:g}, bonus "
+                                f"{case['bonus']:g}, expected result "
+                                f"{case['expected']:g}"
+                            )
+
+                        else:
+                            st.write(
+                                f"- {case['name']}: expected result "
+                                f"{case.get('expected', 'N/A')}"
+                            )
+
+                    if generated_test_suite.get("baseline_comparisons"):
+
                         st.write("**Original behavior reference:**")
+
                         for item in generated_test_suite["baseline_comparisons"]:
+
                             status = (
                                 "behavior differs from the new requirement"
                                 if item["behavior_differs"]
                                 else "matches the new requirement"
                             )
+
                             st.write(
                                 f"- {item['name']}: original reference "
                                 f"{item['original_reference']:g}; new expected "
@@ -630,19 +816,18 @@ if cpp_projects:
                             )
 
                     st.caption(
-                        "Original behavior values are statically derived from "
-                        "simple arithmetic return expressions. They are reference "
-                        "comparisons, not a second execution of the original binary."
+                        "Generated tests are based on the supplied business "
+                        "requirements and the detected C++ function."
                     )
 
                 else:
 
-                    st.info(
-                        "Automatic tests were not generated: "
-                        + generated_test_suite["reason"]
+                    st.warning(
+                        generated_test_suite.get(
+                            "reason",
+                            "Test generation is not supported for this function."
+                        )
                     )
-
-                st.divider()
 
                 # --------------------------------------------------
                 # STEP 2: MCP CODE IMPACT ANALYSIS
@@ -653,10 +838,10 @@ if cpp_projects:
                 ):
 
                     mcp_response = analyze_code_impact_via_mcp(
-                    project_path,
-                    changed_function.strip(),
-                    source_file=selected_source_file
-                )
+                        project_path,
+                        changed_function.strip(),
+                        source_file=selected_source_file
+                    )
 
                     result = mcp_response["analysis"]
 
@@ -709,8 +894,22 @@ if cpp_projects:
 
                             return False
 
-                    # External ZIP projects are uploaded as temporary release assets.
-                    if not is_inside_directory(project_root, repository_root):
+                    # External ZIP projects are stored inside uploaded_projects,
+                    # which itself is located inside the repository.
+                    uploaded_projects_root = os.path.realpath(
+                        os.path.join(repository_root, "uploaded_projects")
+                    )
+
+                    is_uploaded_project = is_inside_directory(
+                        project_root,
+                        uploaded_projects_root
+                    )
+
+                    # External ZIP projects must always use the external GitHub runner.
+                    if is_uploaded_project or not is_inside_directory(
+                        project_root,
+                        repository_root
+                    ):
 
                         def resolve_external_file(file_path):
                             if not file_path:
@@ -907,19 +1106,61 @@ if cpp_projects:
                         # FIND INCLUDE DIRECTORY
                         # --------------------------------------------------
 
-                        possible_include_dirs = [
+                        detected_include_dirs = (
+                            project_structure.get("include_directories", [])
+                        )
+
+                        possible_include_dirs = []
+
+                        for include_path in detected_include_dirs:
+                            include_path = str(include_path).strip()
+
+                            if not include_path:
+                                continue
+
+                            if os.path.isabs(include_path):
+                                candidate_include_dir = os.path.realpath(
+                                    include_path
+                                )
+                            else:
+                                candidate_include_dir = os.path.realpath(
+                                    os.path.join(project_root, include_path)
+                                )
+
+                            if (
+                                is_inside_directory(
+                                    candidate_include_dir,
+                                    project_root
+                                )
+                                and os.path.isdir(candidate_include_dir)
+                            ):
+                                possible_include_dirs.append(
+                                    candidate_include_dir
+                                )
+
+                        possible_include_dirs.extend([
                             os.path.join(project_root, "include"),
                             os.path.join(project_root, "inc"),
                             project_root
-                        ]
+                        ])
 
-                        include_dir = next(
-                            (
-                                directory
-                                for directory in possible_include_dirs
-                                if os.path.isdir(directory)
-                            ),
-                            None
+                        # Keep only unique, existing directories inside the project.
+                        possible_include_dirs = list(dict.fromkeys(
+                            os.path.realpath(directory)
+                            for directory in possible_include_dirs
+                            if (
+                                os.path.isdir(directory)
+                                and is_inside_directory(
+                                    os.path.realpath(directory),
+                                    project_root
+                                )
+                            )
+                        ))
+
+                        include_dir = (
+                            possible_include_dirs[0]
+                            if possible_include_dirs
+                            else None
                         )
 
                         if not include_dir:
@@ -928,7 +1169,6 @@ if cpp_projects:
                                 "No valid C++ include directory was found."
                             )
 
-                        # --------------------------------------------------
                         # CONVERT TO GITHUB REPOSITORY-RELATIVE PATHS
                         # --------------------------------------------------
 
@@ -1359,9 +1599,8 @@ if cpp_projects:
                 )
 
             except Exception as error:
-
-                st.error(f"Impact analysis failed: {error}")
-
+                    st.error(f"Impact analysis failed: {error}")
+                    st.exception(error)
 else:
 
     st.info(

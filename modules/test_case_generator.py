@@ -12,29 +12,40 @@ _NUMERIC_PARAMETER = re.compile(
 )
 
 
+
 def _parse_method(code, expected_function):
+    """Parse a supported C++ member function, including const getters."""
+
     pattern = re.compile(
-        r"\b(?P<return_type>double|float|int|long|short)\s+"
+        r"\b(?P<return_type>"
+        r"(?:std::)?(?:unsigned\s+)?"
+        r"(?:long\s+long|long|short|int|double|float|bool|char|string|void)"
+        r")\s+"
         r"(?P<class_name>[A-Za-z_]\w*)::"
-        r"(?P<function_name>[A-Za-z_]\w*)\s*\((?P<params>[^()]*)\)",
+        r"(?P<function_name>[A-Za-z_]\w*)\s*"
+        r"\((?P<params>[^()]*)\)\s*"
+        r"(?:const\s*)?"
+        r"\{",
         re.MULTILINE,
     )
+
     match = pattern.search(code or "")
 
     if not match:
-        raise ValueError("Could not identify the selected C++ member function.")
+        raise ValueError(
+            "Could not identify the selected C++ member function."
+        )
 
     if match.group("function_name") != expected_function:
-        raise ValueError("The function name does not match the selected function.")
+        raise ValueError(
+            "The function name does not match the selected function."
+        )
 
     parameters = [
         item.strip()
         for item in match.group("params").split(",")
         if item.strip()
     ]
-
-    if len(parameters) != 2:
-        raise ValueError("Only functions with exactly two parameters are supported.")
 
     return {
         "return_type": match.group("return_type"),
@@ -481,6 +492,114 @@ def _generate_employee_tests(
     }
 
 
+def _generate_getter_tests(
+    original_code,
+    modified_code,
+    function_name,
+    requirements,
+    project_path=None,
+):
+    """Generate requirement-based tests for zero-parameter numeric getters."""
+
+    signature = _parse_method(modified_code, function_name)
+    original_signature = _parse_method(original_code, function_name)
+
+    if signature["parameters"]:
+        raise ValueError("Getter must have zero parameters.")
+
+    if original_signature["parameters"]:
+        raise ValueError("Original getter must have zero parameters.")
+
+    if signature["class_name"] != original_signature["class_name"]:
+        raise ValueError("Original and modified class names must match.")
+
+    if signature["return_type"] != original_signature["return_type"]:
+        raise ValueError("Original and modified return types must match.")
+
+    if signature["return_type"] not in ("int", "long", "short"):
+        raise ValueError(
+            "Currently, getter generation supports integer return types."
+        )
+
+    if not project_path:
+        raise ValueError("Project path is required for getter test generation.")
+
+    if not re.search(r"\bexact\b", requirements or "", re.IGNORECASE):
+        raise ValueError("Requirement must specify the exact stored value.")
+
+    if not re.search(r"\b(id|identifier)\b", requirements or "", re.IGNORECASE):
+        raise ValueError("Requirement must describe the employee ID.")
+
+    if not re.search(r"\b(positive|negative)\b", requirements or "", re.IGNORECASE):
+        raise ValueError("Requirement must cover positive and negative IDs.")
+
+    header = _find_project_file(
+        project_path,
+        f"{signature['class_name']}.h"
+    ).name
+
+    samples = [
+        (101, "positive employee ID"),
+        (0, "zero employee ID"),
+        (-10, "negative employee ID"),
+    ]
+
+    cases = []
+
+    lines = [
+        f'#include "{header}"',
+        "#include <iostream>",
+        "",
+        "int main() {",
+        "",
+    ]
+
+    for index, (employee_id, label) in enumerate(samples, start=1):
+        cases.append({
+            "name": label,
+            "employee_id": employee_id,
+            "expected": employee_id,
+        })
+
+        lines.extend([
+            f"    // Test case {index}: {label}",
+            (
+                f'    {signature["class_name"]} employee_{index}'
+                f'({employee_id}, "Test Employee", 50000.0);'
+            ),
+            (
+                f"    int actual_{index} = "
+                f"employee_{index}.{function_name}();"
+            ),
+            f"    int expected_{index} = {employee_id};",
+            f"    if (actual_{index} != expected_{index}) {{",
+            (
+                f'        std::cerr << "GENERATED_TEST_FAILURE: {label}"'
+                f' << std::endl;'
+            ),
+            "        return 1;",
+            "    }",
+            (
+                f'    std::cout << "GENERATED_TEST_PASSED: {label}"'
+                f' << std::endl;'
+            ),
+            "",
+        ])
+
+    lines.extend([
+        "    return 0;",
+        "}",
+    ])
+
+    return {
+        "supported": True,
+        "reason": "Generated zero-parameter getter tests successfully.",
+        "code": "\n".join(lines),
+        "test_cases": cases,
+        "baseline_comparisons": [],
+    }
+
+
 def generate_cpp_test_suite(
     original_code,
     modified_code,
@@ -488,15 +607,25 @@ def generate_cpp_test_suite(
     requirements,
     project_path=None,
 ):
-    """Generate tests for supported numeric or Employee-object member functions."""
+    """Generate C++ tests using the appropriate supported test strategy."""
+
     try:
+        signature = _parse_method(modified_code, function_name)
+
+        # Mode 1: Zero-parameter getter
+        if not signature["parameters"]:
+            return _generate_getter_tests(
+                original_code,
+                modified_code,
+                function_name,
+                requirements,
+                project_path,
+            )
+
+        # Mode 2: Existing numeric salary generation
         try:
             _parse_numeric_signature(modified_code, function_name)
-            mode = "numeric"
-        except ValueError:
-            mode = "employee"
 
-        if mode == "numeric":
             return _generate_numeric_tests(
                 original_code,
                 modified_code,
@@ -504,6 +633,10 @@ def generate_cpp_test_suite(
                 requirements,
             )
 
+        except ValueError:
+            pass
+
+        # Mode 3: Existing Employee-object salary generation
         if not project_path:
             raise ValueError(
                 "Project path is required for Employee-object test generation."

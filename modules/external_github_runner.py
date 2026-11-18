@@ -124,7 +124,15 @@ def run_external_cpp_tests(
 
     release_id = None
     request_id = uuid.uuid4().hex
-    tests = list(test_files or [])
+
+    if isinstance(test_files, str):
+        tests = [
+            item.strip()
+            for item in test_files.splitlines()
+            if item.strip()
+        ]
+    else:
+        tests = list(test_files or [])
 
     try:
         root = Path(project_root).resolve()
