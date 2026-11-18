@@ -441,6 +441,7 @@ def calculate_change_risk(
 
     if test_status == "PASSED":
         reasons.append("Automated C++ tests passed successfully.")
+
     elif test_status == "FAILED":
         test_risk_points = 4
         risk_score += test_risk_points
@@ -448,6 +449,7 @@ def calculate_change_risk(
             "Automated C++ tests failed. "
             "The modified code may have introduced a regression."
         )
+
     elif test_status == "COMPILE_FAILED":
         test_risk_points = 4
         risk_score += test_risk_points
@@ -455,6 +457,7 @@ def calculate_change_risk(
             "C++ compilation failed. "
             "The proposed code could not be validated."
         )
+
     elif test_status == "EXECUTION_BLOCKED":
         test_risk_points = 3
         risk_score += test_risk_points
@@ -462,6 +465,7 @@ def calculate_change_risk(
             "Test execution was blocked by a security policy. "
             "The test result could not be verified."
         )
+
     elif test_status == "TIMEOUT":
         test_risk_points = 3
         risk_score += test_risk_points
@@ -469,6 +473,7 @@ def calculate_change_risk(
             "C++ test execution timed out. "
             "The test result could not be verified."
         )
+
     elif test_status == "ERROR":
         test_risk_points = 3
         risk_score += test_risk_points
@@ -476,6 +481,29 @@ def calculate_change_risk(
             "An error occurred in the C++ test runner. "
             "The test result could not be verified."
         )
+
+    elif test_status == "NOT_AVAILABLE":
+        generated_status_for_check = str(
+            generated_test_status or "NOT_GENERATED"
+        ).strip().upper()
+
+        if generated_status_for_check in (
+            "PASSED",
+            "FAILED",
+            "COMPILE_FAILED"
+        ):
+            reasons.append(
+                "No pre-existing C++ test suite was found. "
+                "Generated tests were used for validation."
+            )
+        else:
+            test_risk_points = 2
+            risk_score += test_risk_points
+            reasons.append(
+                "No pre-existing C++ tests or completed generated tests "
+                "were available. The change remains unverified."
+            )
+
     else:
         test_risk_points = 2
         risk_score += test_risk_points
@@ -484,7 +512,7 @@ def calculate_change_risk(
             "The change remains unverified."
         )
 
-        # --------------------------------------------------
+    # --------------------------------------------------
     # STEP 8: GENERATED TEST EXECUTION STATUS
     # --------------------------------------------------
 
@@ -553,10 +581,17 @@ def calculate_change_risk(
     # STEP 9: GENERATE RECOMMENDATION
     # --------------------------------------------------
 
-    if generated_test_status in ("FAILED", "COMPILE_FAILED"):
+    if generated_test_status == "FAILED":
         recommendation = (
-            "Generated tests failed or could not compile. Review the "
-            "business requirements and modified logic before merging."
+            "Generated test assertions failed. The proposed code may "
+            "violate the specified business requirements. Correct the "
+            "modified logic and rerun the generated tests before merging."
+            )
+
+    elif generated_test_status == "COMPILE_FAILED":
+        recommendation = (
+            "Generated tests could not compile. Review the generated "
+            "test code and project dependencies before merging."
         )
     elif test_status == "FAILED":
         recommendation = (

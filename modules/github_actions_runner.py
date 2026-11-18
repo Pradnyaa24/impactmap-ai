@@ -153,10 +153,36 @@ def validate_repo_path(path, field_name):
 # FAILURE ANALYSIS
 # ============================================================
 
+
 def classify_failure(log_text):
     """Identify the likely category of a C++ build or test failure."""
 
     text = log_text.lower()
+
+    # Read the final generated-test status first.
+    generated_statuses = re.findall(
+        r"IMPACTMAP_GENERATED_TEST_STATUS="
+        r"(PASSED|FAILED|COMPILE_FAILED|NOT_GENERATED)",
+        log_text,
+        re.IGNORECASE
+    )
+
+    if generated_statuses:
+        final_generated_status = generated_statuses[-1].upper()
+
+        if final_generated_status == "FAILED":
+            return "GENERATED TEST ASSERTION FAILURE"
+
+        if final_generated_status == "COMPILE_FAILED":
+            return "GENERATED TEST COMPILATION FAILURE"
+
+    # Also recognize the generated test failure message.
+    if re.search(
+        r"(?m)^\s*GENERATED_TEST_FAILURE:",
+        log_text,
+        re.IGNORECASE
+    ):
+        return "GENERATED TEST ASSERTION FAILURE"
 
     if (
         "undefined reference" in text
@@ -178,11 +204,6 @@ def classify_failure(log_text):
         or "assertion '" in text
         or "assertion failed" in text
         or "assert(" in text
-        or re.search(
-            r"(?m)^\s*GENERATED_TEST_FAILURE:",
-            log_text,
-            re.IGNORECASE
-        )
     ):
         return "UNIT TEST FAILURE"
 
@@ -196,6 +217,7 @@ def classify_failure(log_text):
         return "RUNTIME ERROR"
 
     return "BUILD OR WORKFLOW FAILURE"
+
 
 
 def extract_relevant_log_lines(log_text, max_lines=12):
@@ -247,35 +269,52 @@ def extract_relevant_log_lines(log_text, max_lines=12):
 # TEST STATUS EXTRACTION
 # ============================================================
 
+
 def extract_test_statuses(log_text):
     """
-    Extract actual existing and generated test statuses
-    from the final GitHub Actions workflow markers.
+    Extract the final existing and generated test statuses
+    from GitHub Actions logs.
+
+    Use the LAST matching marker because GitHub Actions logs
+    may contain echoed source code with earlier status strings.
     """
 
-    existing_match = re.search(
+    existing_pattern = (
         r"IMPACTMAP_EXISTING_TEST_STATUS="
-        r"(PASSED|FAILED|COMPILE_FAILED)",
+        r"(PASSED_OR_NOT_AVAILABLE|NOT_AVAILABLE|PASSED|FAILED|COMPILE_FAILED)"
+    )
+
+    generated_pattern = (
+        r"IMPACTMAP_GENERATED_TEST_STATUS="
+        r"(PASSED|FAILED|COMPILE_FAILED|NOT_GENERATED)"
+    )
+
+    existing_matches = re.findall(
+        existing_pattern,
         log_text,
         re.IGNORECASE
     )
 
-    generated_match = re.search(
-        r"IMPACTMAP_GENERATED_TEST_STATUS="
-        r"(PASSED|FAILED|COMPILE_FAILED|NOT_GENERATED)",
+    generated_matches = re.findall(
+        generated_pattern,
         log_text,
         re.IGNORECASE
     )
 
     existing_status = (
-        existing_match.group(1).upper()
-        if existing_match else "UNKNOWN"
+        existing_matches[-1].upper()
+        if existing_matches
+        else "UNKNOWN"
     )
 
     generated_status = (
-        generated_match.group(1).upper()
-        if generated_match else "UNKNOWN"
+        generated_matches[-1].upper()
+        if generated_matches
+        else "UNKNOWN"
     )
+
+    if existing_status == "PASSED_OR_NOT_AVAILABLE":
+        existing_status = "NOT_AVAILABLE"
 
     return existing_status, generated_status
 
