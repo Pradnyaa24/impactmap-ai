@@ -70,90 +70,335 @@ st.set_page_config(
 
 st.markdown("""
 <style>
+    :root {
+        --im-bg: #0b1220;
+        --im-panel: #111c2e;
+        --im-panel-soft: #162338;
+        --im-border: rgba(148, 163, 184, 0.18);
+        --im-text: #e5edf8;
+        --im-muted: #94a3b8;
+        --im-blue: #60a5fa;
+        --im-cyan: #22d3ee;
+    }
+
+    .stApp {
+        background:
+            radial-gradient(ellipse at 12% 0%, rgba(37, 99, 235, 0.13), transparent 34%),
+            linear-gradient(145deg, #0b1220 0%, #0e1727 55%, #101b2d 100%);
+        color: var(--im-text);
+    }
+
     .block-container {
-        max-width: 1500px;
-        padding-top: 2rem;
+        max-width: none !important;
+        width: 100% !important;
+        /* Keep the first app element below Streamlit's fixed Deploy toolbar. */
+        padding-top: 4.1rem !important;
+        padding-left: 1.5rem !important;
+        padding-right: 1.5rem !important;
         padding-bottom: 3rem;
     }
 
-    h1 {
-        font-size: 2.4rem !important;
-        font-weight: 800 !important;
-        letter-spacing: -1px;
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #101a2b 0%, #0c1422 100%);
+        border-right: 1px solid var(--im-border);
+        min-width: 17rem;
+        max-width: 17rem;
     }
 
-    h2, h3 {
-        font-weight: 700 !important;
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+        color: #cbd5e1;
     }
+
+    h1, h2, h3 {
+        color: #f1f5f9 !important;
+        letter-spacing: -0.025em;
+    }
+
+    h1 { font-size: 2.15rem !important; font-weight: 780 !important; }
+    h2 { font-size: 1.45rem !important; font-weight: 720 !important; }
+    h3 { font-size: 1.12rem !important; font-weight: 680 !important; }
 
     [data-testid="stMetric"] {
-        background: rgba(128, 128, 128, 0.08);
-        border: 1px solid rgba(128, 128, 128, 0.22);
-        padding: 16px;
-        border-radius: 12px;
+        background: linear-gradient(145deg, rgba(23, 39, 62, .96), rgba(17, 29, 47, .96));
+        border: 1px solid var(--im-border);
+        border-radius: 13px;
+        padding: 15px 17px;
+        box-shadow: 0 8px 24px rgba(0,0,0,.12);
     }
 
-    [data-testid="stTextArea"] textarea {
-        border-radius: 9px;
-        font-family: monospace;
+    [data-testid="stMetricLabel"] {
+        color: #a9bad0 !important;
+        font-size: .82rem !important;
+    }
+
+    [data-testid="stMetricValue"] {
+        color: #f8fafc !important;
+        font-weight: 750 !important;
+    }
+
+    [data-testid="stTextArea"] textarea,
+    [data-testid="stTextInput"] input {
+        background: #0d1727 !important;
+        color: #e2e8f0 !important;
+        border: 1px solid #33445e !important;
+        border-radius: 9px !important;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
         font-size: 13px;
-        line-height: 1.5;
+        line-height: 1.55;
     }
 
-    [data-testid="stTextInput"] input,
-    [data-testid="stSelectbox"] div[data-baseweb="select"] {
-        border-radius: 8px;
+    [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+        background: #111e31;
+        border-color: #33445e;
+        border-radius: 9px;
     }
 
-    [data-testid="stForm"] {
+    [data-testid="stForm"], [data-testid="stExpander"] {
+        background: rgba(17, 28, 46, .68);
+        border: 1px solid var(--im-border);
         border-radius: 12px;
-        padding: 20px;
     }
+
+    [data-testid="stForm"] { padding: 20px; }
 
     .stButton > button,
     [data-testid="stFormSubmitButton"] button {
-        border-radius: 8px;
-        font-weight: 650;
-        min-height: 42px;
-        transition: all 0.2s ease;
-    }
-
-    [data-testid="stExpander"] {
         border-radius: 9px;
-        border: 1px solid rgba(128, 128, 128, 0.22);
+        font-weight: 680;
+        min-height: 42px;
+        border: 1px solid rgba(96, 165, 250, .35);
+        transition: all .18s ease;
     }
 
-    hr {
-        margin-top: 2rem;
-        margin-bottom: 2rem;
-        opacity: 0.35;
+    .stButton > button[kind="primary"],
+    [data-testid="stFormSubmitButton"] button[kind="primary"] {
+        background: linear-gradient(100deg, #2563eb, #0e7490);
+        color: white;
+        border: 0;
+    }
+
+    .stButton > button:hover {
+        border-color: #60a5fa;
+        transform: translateY(-1px);
+        box-shadow: 0 5px 18px rgba(37, 99, 235, .18);
+    }
+
+    [data-testid="stCode"] {
+        border: 1px solid var(--im-border);
+        border-radius: 10px;
+    }
+
+    [data-testid="stAlert"] {
+        border-radius: 10px;
     }
 
     [data-testid="stCaptionContainer"] {
-        opacity: 0.8;
+        color: #94a3b8;
+    }
+
+    hr {
+        border-color: rgba(148, 163, 184, .18);
+        margin-top: 1.5rem;
+        margin-bottom: 1.5rem;
+    }
+
+
+    /* Top workspace navigation */
+    .im-navbar {
+        position: relative;
+        z-index: 5;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        flex-wrap: wrap;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 12px 20px;
+        margin: 0 0 .85rem 0;
+        border: 1px solid rgba(96,165,250,.24);
+        border-radius: 10px;
+        background: linear-gradient(100deg, rgba(13,25,43,.99), rgba(17,37,58,.98));
+        box-shadow: 0 8px 24px rgba(0,0,0,.16);
+    }
+    .im-nav-brand {
+        color: #f1f5f9 !important;
+        font-weight: 800;
+        letter-spacing: -.02em;
+        white-space: nowrap;
+        text-decoration: none !important;
+    }
+    .im-nav-links {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        flex-wrap: wrap;
+    }
+    .im-nav-links a {
+        color: #cbd5e1 !important;
+        text-decoration: none !important;
+        font-size: .82rem;
+        font-weight: 650;
+        padding: 8px 11px;
+        border-radius: 7px;
+        transition: background .15s ease, color .15s ease;
+    }
+    .im-nav-links a:hover {
+        color: #eff6ff !important;
+        background: rgba(59,130,246,.2);
+    }
+    .im-nav-status {
+        color: #86efac;
+        border: 1px solid rgba(74,222,128,.25);
+        background: rgba(22,163,74,.10);
+        border-radius: 20px;
+        padding: 5px 9px;
+        font-size: .68rem;
+        font-weight: 750;
+        letter-spacing: .06em;
+        white-space: nowrap;
+    }
+    @media (max-width: 760px) {
+        .im-navbar { align-items: flex-start; }
+        .im-nav-links { justify-content: flex-start; width: 100%; }
+        .im-nav-links a { padding: 7px 8px; }
+    }
+
+    /* Compact section rhythm */
+    [data-testid="stVerticalBlock"] > [data-testid="stMarkdownContainer"] h2 {
+        padding-bottom: .35rem;
+        border-bottom: 1px solid rgba(96, 165, 250, .18);
+    }
+
+    @media (max-width: 800px) {
+        .block-container { padding-left: 1rem; padding-right: 1rem; }
+        h1 { font-size: 1.7rem !important; }
     }
 </style>
 """, unsafe_allow_html=True)
 
 
-st.title("🔍 ImpactMap AI")
 
-st.subheader(
-    "Intelligent Code Change Impact Analyzer"
-)
-
+# Clickable in-page navigation. Links scroll to the corresponding workspace sections.
 st.markdown(
     """
-    Analyze code changes, discover dependencies, generate
-    requirement-based tests, execute C++ tests remotely,
-    and evaluate change risk — all in one place.
+    <nav class="im-navbar" aria-label="ImpactMap AI workspace navigation">
+      <a class="im-nav-brand" href="#impactmap-overview">⌘ ImpactMap AI</a>
+      <div class="im-nav-links">
+        <a href="#project-registration">Register</a>
+        <a href="#registered-projects">Projects</a>
+        <a href="#code-impact-analysis">Code Analysis</a>
+        <a href="#test-runs">Test Runs</a>
+        <a href="#risk-analysis">Risk Analysis</a>
+      </div>
+      <span class="im-nav-status">● WORKSPACE</span>
+    </nav>
+    """,
+    unsafe_allow_html=True
+)
+
+# Product identity and developer-oriented workspace header
+st.markdown(
     """
+    <div id="impactmap-overview" style="
+        padding: 1.35rem 1.55rem;
+        margin: .2rem 0 1.1rem 0;
+        border: 1px solid rgba(96,165,250,.25);
+        border-radius: 16px;
+        background: linear-gradient(112deg, rgba(20,42,72,.96), rgba(15,32,52,.88) 58%, rgba(12,74,92,.42));
+        box-shadow: 0 14px 35px rgba(0,0,0,.16);
+    ">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span style="font-size:1.65rem;">⌘</span>
+        <span style="font-size:1.65rem;font-weight:800;letter-spacing:-.04em;color:#f8fafc;">ImpactMap AI</span>
+        <span style="font-size:.68rem;font-weight:700;letter-spacing:.12em;color:#93c5fd;border:1px solid rgba(147,197,253,.35);padding:5px 9px;border-radius:20px;">ENGINEERING INTELLIGENCE</span>
+      </div>
+      <div style="font-size:1.05rem;font-weight:650;color:#dbeafe;margin-top:.55rem;">
+        Intelligent Code Change Impact Analyzer
+      </div>
+      <div style="font-size:.88rem;color:#a9bdd5;margin-top:.45rem;max-width:900px;line-height:1.55;">
+        Trace code changes, discover dependencies, generate requirement-based tests,
+        execute C++ validation remotely, and understand change risk.
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:1rem;">
+        <span style="font-size:.72rem;color:#bfdbfe;background:rgba(37,99,235,.18);padding:5px 9px;border-radius:6px;">C++ ANALYSIS</span>
+        <span style="font-size:.72rem;color:#a5f3fc;background:rgba(8,145,178,.16);padding:5px 9px;border-radius:6px;">MCP</span>
+        <span style="font-size:.72rem;color:#c4b5fd;background:rgba(124,58,237,.16);padding:5px 9px;border-radius:6px;">RAG</span>
+        <span style="font-size:.72rem;color:#86efac;background:rgba(22,163,74,.14);padding:5px 9px;border-radius:6px;">GITHUB ACTIONS</span>
+      </div>
+    </div>
+    """,
+    unsafe_allow_html=True
 )
 
-st.caption(
-    "AI-assisted code analysis | MCP | RAG | GitHub Actions"
+# Compact overview strip fills the top workspace area without changing app logic.
+st.markdown(
+    """
+    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:-.15rem 0 1.15rem 0;">
+      <div style="padding:13px 15px;border:1px solid rgba(96,165,250,.22);border-radius:11px;background:linear-gradient(145deg,rgba(22,43,70,.88),rgba(17,29,47,.88));">
+        <div style="font-size:.66rem;letter-spacing:.1em;font-weight:750;color:#93c5fd;">01 / WORKSPACE</div>
+        <div style="font-size:.91rem;font-weight:700;color:#f1f5f9;margin-top:5px;">Project Discovery</div>
+        <div style="font-size:.74rem;color:#9fb1c8;margin-top:3px;">Register · Upload · Scan</div>
+      </div>
+      <div style="padding:13px 15px;border:1px solid rgba(34,211,238,.2);border-radius:11px;background:linear-gradient(145deg,rgba(15,49,64,.82),rgba(17,29,47,.88));">
+        <div style="font-size:.66rem;letter-spacing:.1em;font-weight:750;color:#67e8f9;">02 / INTELLIGENCE</div>
+        <div style="font-size:.91rem;font-weight:700;color:#f1f5f9;margin-top:5px;">Code Impact</div>
+        <div style="font-size:.74rem;color:#9fb1c8;margin-top:3px;">Compare · Trace · Map</div>
+      </div>
+      <div style="padding:13px 15px;border:1px solid rgba(167,139,250,.2);border-radius:11px;background:linear-gradient(145deg,rgba(43,34,72,.78),rgba(17,29,47,.88));">
+        <div style="font-size:.66rem;letter-spacing:.1em;font-weight:750;color:#c4b5fd;">03 / VALIDATION</div>
+        <div style="font-size:.91rem;font-weight:700;color:#f1f5f9;margin-top:5px;">Test Automation</div>
+        <div style="font-size:.74rem;color:#9fb1c8;margin-top:3px;">Generate · Execute · Verify</div>
+      </div>
+      <div style="padding:13px 15px;border:1px solid rgba(74,222,128,.2);border-radius:11px;background:linear-gradient(145deg,rgba(22,54,48,.78),rgba(17,29,47,.88));">
+        <div style="font-size:.66rem;letter-spacing:.1em;font-weight:750;color:#86efac;">04 / DECISION</div>
+        <div style="font-size:.91rem;font-weight:700;color:#f1f5f9;margin-top:5px;">Risk Intelligence</div>
+        <div style="font-size:.74rem;color:#9fb1c8;margin-top:3px;">Assess · Explain · Review</div>
+      </div>
+    </div>
+    <style>
+      @media (max-width: 900px) {
+        div[style*="grid-template-columns:repeat(4"] { grid-template-columns:repeat(2,minmax(0,1fr)) !important; }
+      }
+      @media (max-width: 520px) {
+        div[style*="grid-template-columns:repeat(4"] { grid-template-columns:1fr !important; }
+      }
+    </style>
+    """,
+    unsafe_allow_html=True
 )
 
+# Sidebar provides workspace orientation without changing analysis behavior.
+with st.sidebar:
+    st.markdown(
+        """
+        <div style="padding:.5rem 0 1rem 0;">
+          <div style="font-size:1.08rem;font-weight:800;color:#f1f5f9;">⌘ ImpactMap AI</div>
+          <div style="font-size:.7rem;letter-spacing:.12em;color:#7dd3fc;margin-top:3px;">DEVELOPER WORKSPACE</div>
+        </div>
+        <div style="border-top:1px solid rgba(148,163,184,.2);padding-top:1rem;">
+          <div style="font-size:.7rem;font-weight:700;letter-spacing:.1em;color:#94a3b8;margin-bottom:.6rem;">WORKSPACE MODULES</div>
+          <div style="padding:.48rem .6rem;border-radius:7px;background:rgba(37,99,235,.18);color:#bfdbfe;margin-bottom:5px;">▣ &nbsp; Project Registration</div>
+          <div style="padding:.48rem .6rem;color:#cbd5e1;margin-bottom:5px;">⌕ &nbsp; Code Impact Analysis</div>
+          <div style="padding:.48rem .6rem;color:#cbd5e1;margin-bottom:5px;">⌁ &nbsp; Test Execution</div>
+          <div style="padding:.48rem .6rem;color:#cbd5e1;margin-bottom:5px;">◈ &nbsp; Risk & Dependencies</div>
+        </div>
+        <div style="margin-top:1.3rem;padding:.8rem;border:1px solid rgba(96,165,250,.2);border-radius:9px;background:rgba(15,35,58,.65);">
+          <div style="font-size:.68rem;color:#93c5fd;font-weight:700;letter-spacing:.08em;">ANALYSIS PIPELINE</div>
+          <div style="font-size:.78rem;color:#cbd5e1;line-height:1.8;margin-top:.4rem;">
+            01 &nbsp; Project discovery<br>
+            02 &nbsp; Code comparison<br>
+            03 &nbsp; Impact mapping<br>
+            04 &nbsp; Test generation<br>
+            05 &nbsp; Remote execution<br>
+            06 &nbsp; Risk assessment
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    st.caption("ImpactMap AI · Developer build")
 
 st.divider()
 
@@ -162,6 +407,7 @@ st.divider()
 # PROJECT REGISTRATION
 # --------------------------------------------------
 
+st.markdown('<div id="project-registration"></div>', unsafe_allow_html=True)
 st.header("Register New Project")
 
 st.subheader("Upload an External C++ Project")
@@ -280,6 +526,7 @@ with st.form("project_form"):
 # REGISTERED PROJECTS
 # --------------------------------------------------
 
+st.markdown('<div id="registered-projects"></div>', unsafe_allow_html=True)
 st.header("Registered Projects")
 
 try:
@@ -328,6 +575,7 @@ st.divider()
 # CODE IMPACT ANALYSIS
 # --------------------------------------------------
 
+st.markdown('<div id="code-impact-analysis"></div>', unsafe_allow_html=True)
 st.header("🔬 Code Impact Analysis")
 
 st.write(
@@ -853,6 +1101,7 @@ if cpp_projects:
 
                 st.divider()
 
+                st.markdown('<div id="test-runs"></div>', unsafe_allow_html=True)
                 st.subheader("🧪 GitHub Actions C++ Test Execution")
 
                 st.info(
@@ -954,23 +1203,40 @@ if cpp_projects:
                         st.write("**External Source File:**", os.path.relpath(external_source, project_root).replace("\\", "/"))
                         st.write("**Existing Test Files:**", len(external_tests))
 
+
                         # Preserve the rest of the selected source file when the editor
                         # contains only the changed function rather than the complete file.
+
                         source_text = Path(external_source).read_text(encoding="utf-8")
+
                         original_fragment = (original_code or "").strip()
-                        if original_fragment and original_fragment in source_text:
+                        modified_fragment = (modified_code or "").strip()
+
+                        # Case 1: No actual code change.
+                        # Use the existing source file and continue running generated tests.
+                        if original_fragment == modified_fragment:
+                            external_proposed_code = source_text
+
+                        # Case 2: Original function exists exactly in the source file.
+                        elif original_fragment and original_fragment in source_text:
                             external_proposed_code = source_text.replace(
                                 original_fragment,
                                 modified_code,
                                 1
                             )
-                        elif modified_code.strip().startswith(("#include", "//", "/*")):
+
+                        # Case 3: User supplied a complete source file.
+                        elif modified_fragment.startswith(("#include", "//", "/*")):
                             external_proposed_code = modified_code
+
+                        # Case 4: Cannot safely identify the function to replace.
                         else:
                             raise ValueError(
-                                "Could not locate the original function code inside the selected source file. "
-                                "Please ensure Original Code matches the function in that file."
+                                "Could not safely locate the original function code "
+                                "inside the selected source file. "
+                                "Please verify the selected source file and original function."
                             )
+
 
                         with st.spinner("Uploading external project and running GitHub Actions tests..."):
                             test_result = run_external_cpp_tests(
@@ -1385,6 +1651,8 @@ if cpp_projects:
                         risk_result["generated_test_status"]
                     )
 
+                st.markdown('<div id="risk-analysis"></div>', unsafe_allow_html=True)
+
                 # --------------------------------------------------
                 # RISK LEVEL
                 # --------------------------------------------------
@@ -1579,7 +1847,7 @@ if cpp_projects:
                 st.subheader("🤖 Impact Explanation")
 
                 st.caption(
-                    "Rule-based Mock LLM Engine | No API credits required"
+                    "Meta Llama 3.2 3B | Local AI Impact Analysis"
                 )
 
                 with st.spinner("Generating impact explanation..."):
