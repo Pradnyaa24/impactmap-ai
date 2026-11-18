@@ -752,7 +752,7 @@ if cpp_projects:
                         )
 
                         st.write("**Selected Project:**", selected_project["project_name"])
-                        st.write("**External Source File:**", os.path.relpath(external_source, project_root).replace("\\\\", "/"))
+                        st.write("**External Source File:**", os.path.relpath(external_source, project_root).replace("\\", "/"))
                         st.write("**Existing Test Files:**", len(external_tests))
 
                         # Preserve the rest of the selected source file when the editor
