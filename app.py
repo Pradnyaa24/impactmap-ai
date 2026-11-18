@@ -755,10 +755,28 @@ if cpp_projects:
                         st.write("**External Source File:**", os.path.relpath(external_source, project_root).replace("\\\\", "/"))
                         st.write("**Existing Test Files:**", len(external_tests))
 
+                        # Preserve the rest of the selected source file when the editor
+                        # contains only the changed function rather than the complete file.
+                        source_text = Path(external_source).read_text(encoding="utf-8")
+                        original_fragment = (original_code or "").strip()
+                        if original_fragment and original_fragment in source_text:
+                            external_proposed_code = source_text.replace(
+                                original_fragment,
+                                modified_code,
+                                1
+                            )
+                        elif modified_code.strip().startswith(("#include", "//", "/*")):
+                            external_proposed_code = modified_code
+                        else:
+                            raise ValueError(
+                                "Could not locate the original function code inside the selected source file. "
+                                "Please ensure Original Code matches the function in that file."
+                            )
+
                         with st.spinner("Uploading external project and running GitHub Actions tests..."):
                             test_result = run_external_cpp_tests(
                                 project_root=project_root,
-                                proposed_code=modified_code,
+                                proposed_code=external_proposed_code,
                                 source_file=external_source,
                                 test_files=external_tests,
                                 include_dir=external_include,
