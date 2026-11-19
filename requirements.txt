@@ -43,3 +43,4 @@ networkx==3.7
 plotly==7.1.0
 mcp==1.30.0
 openai==3.50.0
+chromadb==1.5.9

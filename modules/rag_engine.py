@@ -1,24 +1,65 @@
 
-import re
-import math
 from pathlib import Path
-from collections import Counter
+import hashlib
+import json
+from collections import OrderedDict
+
+import chromadb
+
+
+SUPPORTED_EXTENSIONS = {
+    ".cpp", ".h", ".hpp", ".txt", ".md"
+}
+
+IGNORED_DIRECTORIES = {
+    ".git",
+    ".venv",
+    "venv",
+    "venv312",
+    "__pycache__",
+    "node_modules",
+    "build",
+    "dist"
+}
+
+# Reuse one ChromaDB client throughout the running process.
+_chroma_client = None
+
+# Keep a maximum of 8 recently used project indexes in memory.
+_collection_cache = OrderedDict()
+MAX_CACHED_COLLECTIONS = 8
+
+
+def get_chroma_client():
+    """Return the shared in-memory ChromaDB client."""
+
+    global _chroma_client
+
+    if _chroma_client is None:
+        _chroma_client = chromadb.Client()
+
+    return _chroma_client
 
 
 def load_project_documents(project_path):
-    """Load C++ source files and project documentation."""
+    """Load supported source-code and documentation files."""
 
     project_path = Path(project_path)
 
-    supported_extensions = {
-        ".cpp", ".h", ".hpp", ".txt", ".md"
-    }
-
     documents = []
+
+    if not project_path.exists() or not project_path.is_dir():
+        return documents
 
     for file_path in project_path.rglob("*"):
 
-        if file_path.suffix.lower() not in supported_extensions:
+        if any(part in IGNORED_DIRECTORIES for part in file_path.parts):
+            continue
+
+        if not file_path.is_file():
+            continue
+
+        if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue
 
         try:
@@ -27,10 +68,11 @@ def load_project_documents(project_path):
                 errors="ignore"
             )
 
-            documents.append({
-                "file": str(file_path.relative_to(project_path)),
-                "content": content
-            })
+            if content.strip():
+                documents.append({
+                    "file": str(file_path.relative_to(project_path)),
+                    "content": content
+                })
 
         except OSError:
             continue
@@ -41,13 +83,21 @@ def load_project_documents(project_path):
 def chunk_documents(documents, chunk_size=40, overlap=5):
     """Split documents into overlapping line-based chunks."""
 
+    if chunk_size <= 0 or overlap < 0 or overlap >= chunk_size:
+        raise ValueError(
+            "chunk_size must be positive and overlap must be "
+            "smaller than chunk_size."
+        )
+
     chunks = []
+
+    step = chunk_size - overlap
 
     for document in documents:
 
         lines = document["content"].splitlines()
 
-        for start in range(0, len(lines), chunk_size - overlap):
+        for start in range(0, len(lines), step):
 
             chunk_lines = lines[start:start + chunk_size]
 
@@ -64,126 +114,172 @@ def chunk_documents(documents, chunk_size=40, overlap=5):
     return chunks
 
 
-def tokenize(text):
-    """Convert text into lowercase tokens."""
+def get_chunks_fingerprint(chunks):
+    """Generate a stable fingerprint for the supplied code chunks."""
 
-    return re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", text.lower())
+    serialized_chunks = json.dumps(
+        chunks,
+        sort_keys=True,
+        ensure_ascii=False
+    )
+
+    return hashlib.sha256(
+        serialized_chunks.encode("utf-8")
+    ).hexdigest()
+
+
+def build_chroma_index(chunks):
+    """
+    Build or reuse a ChromaDB vector index.
+
+    Unchanged project content reuses its existing collection.
+    Changed project content automatically gets a new index.
+    """
+
+    client = get_chroma_client()
+
+    fingerprint = get_chunks_fingerprint(chunks)
+
+    # Return the existing index if this exact content was indexed before.
+    if fingerprint in _collection_cache:
+
+        _collection_cache.move_to_end(fingerprint)
+
+        return _collection_cache[fingerprint]
+
+    collection_name = "impactmap_" + fingerprint[:32]
+
+    # Check whether this collection already exists in the shared client.
+    collection = client.get_or_create_collection(
+        name=collection_name,
+        metadata={
+            "description": "ImpactMap AI source-code embeddings",
+            "hnsw:space": "cosine"
+        }
+    )
+
+    # If the collection is incomplete, rebuild it.
+    if collection.count() != len(chunks):
+
+        client.delete_collection(name=collection_name)
+
+        collection = client.create_collection(
+            name=collection_name,
+            metadata={
+                "description": "ImpactMap AI source-code embeddings",
+                "hnsw:space": "cosine"
+            }
+        )
+
+        batch_size = 500
+
+        for start in range(0, len(chunks), batch_size):
+
+            batch = chunks[start:start + batch_size]
+
+            ids = [
+                f"chunk_{start + i}"
+                for i in range(len(batch))
+            ]
+
+            documents = [
+                item["text"] for item in batch
+            ]
+
+            metadatas = [
+                {
+                    "file": item["file"],
+                    "start_line": int(item["start_line"])
+                }
+                for item in batch
+            ]
+
+            collection.add(
+                ids=ids,
+                documents=documents,
+                metadatas=metadatas
+            )
+
+    # Remember this collection for subsequent analysis requests.
+    _collection_cache[fingerprint] = collection
+
+    _collection_cache.move_to_end(fingerprint)
+
+    # Remove the oldest cached collection when the limit is exceeded.
+    while len(_collection_cache) > MAX_CACHED_COLLECTIONS:
+
+        old_fingerprint, old_collection = (
+            _collection_cache.popitem(last=False)
+        )
+
+        client.delete_collection(
+            name=old_collection.name
+        )
+
+    return collection
 
 
 def build_tfidf_index(chunks):
-    """Build a TF-IDF index using Python dictionaries."""
+    """
+    Backward-compatible function name.
 
-    documents = []
-    document_frequency = Counter()
+    ChromaDB is used internally instead of TF-IDF.
+    Existing MCP and impact-analysis modules remain compatible.
+    """
 
-    for chunk in chunks:
-
-        tokens = tokenize(chunk["text"])
-        term_counts = Counter(tokens)
-
-        documents.append({
-            **chunk,
-            "term_counts": term_counts
-        })
-
-        document_frequency.update(set(tokens))
-
-    total_documents = len(documents)
-
-    for document in documents:
-
-        weights = {}
-
-        for term, count in document["term_counts"].items():
-
-            tf = count / max(1, sum(document["term_counts"].values()))
-
-            idf = math.log(
-                (1 + total_documents) /
-                (1 + document_frequency[term])
-            ) + 1
-
-            weights[term] = tf * idf
-
-        document["vector"] = weights
-
-    return documents
-
-
-def cosine_similarity(vector_a, vector_b):
-    """Calculate cosine similarity between two sparse vectors."""
-
-    common_terms = set(vector_a) & set(vector_b)
-
-    dot_product = sum(
-        vector_a[term] * vector_b[term]
-        for term in common_terms
-    )
-
-    magnitude_a = math.sqrt(
-        sum(value ** 2 for value in vector_a.values())
-    )
-
-    magnitude_b = math.sqrt(
-        sum(value ** 2 for value in vector_b.values())
-    )
-
-    if magnitude_a == 0 or magnitude_b == 0:
-        return 0.0
-
-    return dot_product / (magnitude_a * magnitude_b)
+    return build_chroma_index(chunks)
 
 
 def search_documents(query, index, top_k=3):
-    """Retrieve the most relevant document chunks."""
+    """Retrieve semantically relevant code chunks from ChromaDB."""
 
-    query_tokens = tokenize(query)
-    query_counts = Counter(query_tokens)
-
-    if not query_counts:
+    if not query or not query.strip():
         return []
 
-    document_frequency = Counter()
+    if top_k <= 0:
+        return []
 
-    for document in index:
-        document_frequency.update(set(document["term_counts"]))
+    total_chunks = index.count()
 
-    total_documents = len(index)
+    if total_chunks == 0:
+        return []
 
-    query_vector = {}
-
-    for term, count in query_counts.items():
-
-        tf = count / len(query_tokens)
-
-        idf = math.log(
-            (1 + total_documents) /
-            (1 + document_frequency.get(term, 0))
-        ) + 1
-
-        query_vector[term] = tf * idf
-
-    results = []
-
-    for document in index:
-
-        score = cosine_similarity(
-            query_vector,
-            document["vector"]
-        )
-
-        if score > 0:
-
-            results.append({
-                "file": document["file"],
-                "text": document["text"],
-                "start_line": document["start_line"],
-                "score": round(score, 4)
-            })
-
-    results.sort(
-        key=lambda item: item["score"],
-        reverse=True
+    results = index.query(
+        query_texts=[query],
+        n_results=min(top_k, total_chunks),
+        include=[
+            "documents",
+            "metadatas",
+            "distances"
+        ]
     )
 
-    return results[:top_k]
+    retrieved_documents = results.get("documents", [[]])[0]
+    retrieved_metadatas = results.get("metadatas", [[]])[0]
+    distances = results.get("distances", [[]])[0]
+
+    output = []
+
+    for document, metadata, distance in zip(
+        retrieved_documents,
+        retrieved_metadatas,
+        distances
+    ):
+
+        if not document or not metadata:
+            continue
+
+        # ChromaDB cosine distance = 1 - cosine similarity.
+        similarity_score = max(
+            0.0,
+            min(1.0, 1.0 - float(distance))
+        )
+
+        output.append({
+            "file": metadata.get("file", "Unknown"),
+            "text": document,
+            "start_line": metadata.get("start_line", 1),
+            "score": round(similarity_score, 4)
+        })
+
+    return output

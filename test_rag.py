@@ -15,7 +15,7 @@ chunks = chunk_documents(documents)
 print("Chunks Created:", len(chunks))
 
 index = build_tfidf_index(chunks)
-print("TF-IDF Index Created Successfully!")
+print("ChromaDB Vector Index Created Successfully!")
 
 query = "calculateSalary"
 
