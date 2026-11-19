@@ -492,6 +492,7 @@ def _generate_employee_tests(
     }
 
 
+
 def _generate_getter_tests(
     original_code,
     modified_code,
@@ -499,16 +500,13 @@ def _generate_getter_tests(
     requirements,
     project_path=None,
 ):
-    """Generate requirement-based tests for zero-parameter numeric getters."""
+    """Generate requirement-based tests for integer and double getters."""
 
     signature = _parse_method(modified_code, function_name)
     original_signature = _parse_method(original_code, function_name)
 
-    if signature["parameters"]:
+    if signature["parameters"] or original_signature["parameters"]:
         raise ValueError("Getter must have zero parameters.")
-
-    if original_signature["parameters"]:
-        raise ValueError("Original getter must have zero parameters.")
 
     if signature["class_name"] != original_signature["class_name"]:
         raise ValueError("Original and modified class names must match.")
@@ -516,88 +514,159 @@ def _generate_getter_tests(
     if signature["return_type"] != original_signature["return_type"]:
         raise ValueError("Original and modified return types must match.")
 
-    if signature["return_type"] not in ("int", "long", "short"):
-        raise ValueError(
-            "Currently, getter generation supports integer return types."
-        )
-
     if not project_path:
         raise ValueError("Project path is required for getter test generation.")
 
-    if not re.search(r"\bexact\b", requirements or "", re.IGNORECASE):
-        raise ValueError("Requirement must specify the exact stored value.")
-
-    if not re.search(r"\b(id|identifier)\b", requirements or "", re.IGNORECASE):
-        raise ValueError("Requirement must describe the employee ID.")
-
-    if not re.search(r"\b(positive|negative)\b", requirements or "", re.IGNORECASE):
-        raise ValueError("Requirement must cover positive and negative IDs.")
+    return_type = signature["return_type"]
+    class_name = signature["class_name"]
 
     header = _find_project_file(
         project_path,
-        f"{signature['class_name']}.h"
+        f"{class_name}.h"
     ).name
 
-    samples = [
-        (101, "positive employee ID"),
-        (0, "zero employee ID"),
-        (-10, "negative employee ID"),
-    ]
+    # Mode 1: Integer employee ID getter
+    if return_type in ("int", "long", "short"):
 
-    cases = []
+        if not re.search(r"\bexact\b", requirements or "", re.IGNORECASE):
+            raise ValueError("Requirement must specify the exact stored value.")
 
-    lines = [
-        f'#include "{header}"',
-        "#include <iostream>",
-        "",
-        "int main() {",
-        "",
-    ]
+        if not re.search(r"\b(id|identifier)\b", requirements or "", re.IGNORECASE):
+            raise ValueError("Requirement must describe the employee ID.")
 
-    for index, (employee_id, label) in enumerate(samples, start=1):
-        cases.append({
-            "name": label,
-            "employee_id": employee_id,
-            "expected": employee_id,
-        })
+        if not re.search(r"\b(positive|negative)\b", requirements or "", re.IGNORECASE):
+            raise ValueError("Requirement must cover positive and negative IDs.")
 
+        samples = [
+            (101, 101, "positive employee ID"),
+            (0, 0, "zero employee ID"),
+            (-10, -10, "negative employee ID"),
+        ]
+
+        lines = [
+            f'#include "{header}"',
+            "#include <iostream>",
+            "",
+            "int main() {",
+            "",
+        ]
+
+        cases = []
+
+        for index, (employee_id, expected, label) in enumerate(samples, start=1):
+            cases.append({
+                "name": label,
+                "employee_id": employee_id,
+                "expected": expected,
+            })
+
+            lines.extend([
+                f"    // Test case {index}: {label}",
+                f'    {class_name} employee_{index}({employee_id}, "Test Employee", 50000.0);',
+                f"    int actual_{index} = employee_{index}.{function_name}();",
+                f"    int expected_{index} = {expected};",
+                f"    if (actual_{index} != expected_{index}) {{",
+                f'        std::cerr << "GENERATED_TEST_FAILURE: {label}" << std::endl;',
+                "        return 1;",
+                "    }",
+                f'    std::cout << "GENERATED_TEST_PASSED: {label}" << std::endl;',
+                "",
+            ])
+
+        lines.extend(["    return 0;", "}"])
+
+        return {
+            "supported": True,
+            "reason": "Generated integer getter tests successfully.",
+            "code": "\n".join(lines),
+            "test_cases": cases,
+            "baseline_comparisons": [],
+        }
+
+    # Mode 2: Double employee salary getter
+    if return_type == "double":
+
+        if not re.search(r"\bsalary\b", requirements or "", re.IGNORECASE):
+            raise ValueError("Requirements must describe employee salary.")
+
+        if not re.search(r"\bnegative\b", requirements or "", re.IGNORECASE):
+            raise ValueError("Requirements must describe negative salary handling.")
+
+        if not re.search(r"\b(zero|0)\b", requirements or "", re.IGNORECASE):
+            raise ValueError("Requirements must cover zero salary.")
+
+        if not re.search(r"\bpositive\b", requirements or "", re.IGNORECASE):
+            raise ValueError("Requirements must cover positive salary.")
+
+        samples = [
+            (30000.0, 30000.0, "positive employee salary"),
+            (0.0, 0.0, "zero employee salary"),
+            (-5000.0, 0.0, "negative employee salary"),
+        ]
+
+        lines = [
+            f'#include "{header}"',
+            "#include <cmath>",
+            "#include <iostream>",
+            "",
+            "int main() {",
+            "    const double tolerance = 1e-6;",
+            "",
+        ]
+
+        cases = []
+
+        for index, (salary, expected, label) in enumerate(samples, start=1):
+            cases.append({
+                "name": label,
+                "salary": salary,
+                "expected": expected,
+            })
+
+            lines.extend([
+                f"    // Test case {index}: {label}",
+                f'    {class_name} employee_{index}({index}, "Test Employee", {salary:.10g});',
+                f"    double actual_{index} = employee_{index}.{function_name}();",
+                f"    double expected_{index} = {expected:.10g};",
+                f"    if (std::fabs(actual_{index} - expected_{index}) > tolerance) {{",
+                f'        std::cerr << "GENERATED_TEST_FAILURE: {label}" << std::endl;',
+                "        return 1;",
+                "    }",
+                f'    std::cout << "GENERATED_TEST_PASSED: {label}" << std::endl;',
+                "",
+            ])
+
+        # Verify that other employee information remains accessible.
         lines.extend([
-            f"    // Test case {index}: {label}",
-            (
-                f'    {signature["class_name"]} employee_{index}'
-                f'({employee_id}, "Test Employee", 50000.0);'
-            ),
-            (
-                f"    int actual_{index} = "
-                f"employee_{index}.{function_name}();"
-            ),
-            f"    int expected_{index} = {employee_id};",
-            f"    if (actual_{index} != expected_{index}) {{",
-            (
-                f'        std::cerr << "GENERATED_TEST_FAILURE: {label}"'
-                f' << std::endl;'
-            ),
+            '    Employee verification_employee(101, "Test Employee", -5000.0);',
+            "",
+            "    if (verification_employee.getId() != 101) {",
+            '        std::cerr << "GENERATED_TEST_FAILURE: employee ID changed" << std::endl;',
             "        return 1;",
             "    }",
-            (
-                f'    std::cout << "GENERATED_TEST_PASSED: {label}"'
-                f' << std::endl;'
-            ),
             "",
+            '    if (verification_employee.getName() != "Test Employee") {',
+            '        std::cerr << "GENERATED_TEST_FAILURE: employee name changed" << std::endl;',
+            "        return 1;",
+            "    }",
+            "",
+            '    std::cout << "GENERATED_TEST_PASSED: employee ID and name remain accessible" << std::endl;',
+            "",
+            "    return 0;",
+            "}",
         ])
 
-    lines.extend([
-        "    return 0;",
-        "}",
-    ])
+        return {
+            "supported": True,
+            "reason": "Generated double salary getter tests successfully.",
+            "code": "\n".join(lines),
+            "test_cases": cases,
+            "baseline_comparisons": [],
+        }
 
-    return {
-        "supported": True,
-        "reason": "Generated zero-parameter getter tests successfully.",
-        "code": "\n".join(lines),
-        "test_cases": cases,
-        "baseline_comparisons": [],
-    }
+    raise ValueError(
+        f"Getter return type '{return_type}' is not currently supported."
+    )
 
 
 def generate_cpp_test_suite(

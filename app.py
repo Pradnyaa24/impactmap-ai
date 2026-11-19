@@ -5,7 +5,10 @@ import streamlit as st
 
 from services.project_service import (
     create_project,
-    get_all_projects
+    get_active_projects,
+    get_hidden_projects,
+    hide_project,
+    restore_project
 )
 
 from modules.project_zip_handler import extract_cpp_project_zip
@@ -66,6 +69,10 @@ st.set_page_config(
     page_icon="🔍",
     layout="wide"
 )
+
+# Saved Projects is closed by default and opens only when requested.
+if "show_saved_projects" not in st.session_state:
+    st.session_state.show_saved_projects = False
 
 
 st.markdown("""
@@ -280,7 +287,8 @@ st.markdown("""
 
 
 
-# Clickable in-page navigation. Links scroll to the corresponding workspace sections.
+# Top workspace navigation. The links scroll to the relevant sections;
+# Saved Projects is a real Streamlit button (not HTML text).
 st.markdown(
     """
     <nav class="im-navbar" aria-label="ImpactMap AI workspace navigation">
@@ -369,23 +377,79 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Sidebar provides workspace orientation without changing analysis behavior.
+
+# --------------------------------------------------
+# SIDEBAR NAVIGATION
+# --------------------------------------------------
+
 with st.sidebar:
+
+    # BRANDING + WORKSPACE MODULES
     st.markdown(
         """
         <div style="padding:.5rem 0 1rem 0;">
-          <div style="font-size:1.08rem;font-weight:800;color:#f1f5f9;">⌘ ImpactMap AI</div>
-          <div style="font-size:.7rem;letter-spacing:.12em;color:#7dd3fc;margin-top:3px;">DEVELOPER WORKSPACE</div>
+          <div style="font-size:1.08rem;font-weight:800;color:#f1f5f9;">
+            ⌘ ImpactMap AI
+          </div>
+          <div style="font-size:.7rem;letter-spacing:.12em;color:#7dd3fc;margin-top:3px;">
+            DEVELOPER WORKSPACE
+          </div>
         </div>
+
         <div style="border-top:1px solid rgba(148,163,184,.2);padding-top:1rem;">
-          <div style="font-size:.7rem;font-weight:700;letter-spacing:.1em;color:#94a3b8;margin-bottom:.6rem;">WORKSPACE MODULES</div>
-          <div style="padding:.48rem .6rem;border-radius:7px;background:rgba(37,99,235,.18);color:#bfdbfe;margin-bottom:5px;">▣ &nbsp; Project Registration</div>
-          <div style="padding:.48rem .6rem;color:#cbd5e1;margin-bottom:5px;">⌕ &nbsp; Code Impact Analysis</div>
-          <div style="padding:.48rem .6rem;color:#cbd5e1;margin-bottom:5px;">⌁ &nbsp; Test Execution</div>
-          <div style="padding:.48rem .6rem;color:#cbd5e1;margin-bottom:5px;">◈ &nbsp; Risk & Dependencies</div>
+          <div style="font-size:.7rem;font-weight:700;letter-spacing:.1em;color:#94a3b8;margin-bottom:.6rem;">
+            WORKSPACE MODULES
+          </div>
+
+          <div style="padding:.48rem .6rem;border-radius:7px;background:rgba(37,99,235,.18);color:#bfdbfe;margin-bottom:5px;">
+            ▣ &nbsp; Project Registration
+          </div>
+
+          <div style="padding:.48rem .6rem;color:#cbd5e1;margin-bottom:5px;">
+            ⌕ &nbsp; Code Impact Analysis
+          </div>
+
+          <div style="padding:.48rem .6rem;color:#cbd5e1;margin-bottom:5px;">
+            ⌁ &nbsp; Test Execution
+          </div>
+
+          <div style="padding:.48rem .6rem;color:#cbd5e1;margin-bottom:5px;">
+            ◈ &nbsp; Risk & Dependencies
+          </div>
         </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # WORKSPACE MENU
+    st.markdown("---")
+    st.markdown("### WORKSPACE MENU")
+
+    if st.button(
+        "📁 Saved Projects",
+        key="sidebar_saved_projects",
+        use_container_width=True
+    ):
+        st.session_state.show_saved_projects = True
+        st.rerun()
+
+    if st.button(
+        "🏠 Main Workspace",
+        key="sidebar_main_workspace",
+        use_container_width=True
+    ):
+        st.session_state.show_saved_projects = False
+        st.rerun()
+
+    # ANALYSIS PIPELINE
+    st.markdown(
+        """
         <div style="margin-top:1.3rem;padding:.8rem;border:1px solid rgba(96,165,250,.2);border-radius:9px;background:rgba(15,35,58,.65);">
-          <div style="font-size:.68rem;color:#93c5fd;font-weight:700;letter-spacing:.08em;">ANALYSIS PIPELINE</div>
+
+          <div style="font-size:.68rem;color:#93c5fd;font-weight:700;letter-spacing:.08em;">
+            ANALYSIS PIPELINE
+          </div>
+
           <div style="font-size:.78rem;color:#cbd5e1;line-height:1.8;margin-top:.4rem;">
             01 &nbsp; Project discovery<br>
             02 &nbsp; Code comparison<br>
@@ -394,14 +458,15 @@ with st.sidebar:
             05 &nbsp; Remote execution<br>
             06 &nbsp; Risk assessment
           </div>
+
         </div>
         """,
         unsafe_allow_html=True
     )
+
     st.caption("ImpactMap AI · Developer build")
 
 st.divider()
-
 
 # --------------------------------------------------
 # PROJECT REGISTRATION
@@ -526,46 +591,134 @@ with st.form("project_form"):
 # REGISTERED PROJECTS
 # --------------------------------------------------
 
-st.markdown('<div id="registered-projects"></div>', unsafe_allow_html=True)
+
+# --------------------------------------------------
+# REGISTERED PROJECTS
+# --------------------------------------------------
+
+st.markdown(
+    '<div id="registered-projects"></div>',
+    unsafe_allow_html=True
+)
+
 st.header("Registered Projects")
 
 try:
-
-    projects = get_all_projects()
+    projects = get_active_projects()
 
     if projects:
-
-        st.write(f"Total Projects: {len(projects)}")
+        st.write(f"Total Active Projects: {len(projects)}")
 
         for project in projects:
 
-            with st.expander(project["project_name"]):
+            col_project, col_hide = st.columns([0.90, 0.10])
 
-                st.write(
-                    "**Description:**",
-                    project["project_description"] or "N/A"
-                )
+            with col_project:
+                with st.expander(project["project_name"]):
 
-                st.write(
-                    "**Programming Language:**",
-                    project["programming_language"] or "N/A"
-                )
+                    st.write(
+                        "**Description:**",
+                        project["project_description"] or "N/A"
+                    )
 
-                st.write(
-                    "**Project Path:**",
-                    project["project_path"] or "N/A"
-                )
+                    st.write(
+                        "**Programming Language:**",
+                        project["programming_language"] or "N/A"
+                    )
 
-                st.write("**Project ID:**", project["id"])
+                    st.write(
+                        "**Project Path:**",
+                        project["project_path"] or "N/A"
+                    )
+
+                    st.write("**Project ID:**", project["id"])
+
+            with col_hide:
+                if st.button(
+                    "×",
+                    key=f"hide_project_{project['id']}",
+                    help="Hide this project from the main list"
+                ):
+                    hide_project(project["id"])
+                    st.toast(
+                        f"{project['project_name']} moved to Saved Projects"
+                    )
+                    st.rerun()
 
     else:
-
-        st.info("No projects registered yet.")
+        st.info("No active projects available.")
 
 except Exception as error:
-
-    st.error(f"Unable to load projects: {error}")
+    st.error(f"Unable to load active projects: {error}")
     projects = []
+
+
+
+# --------------------------------------------------
+# SAVED PROJECTS
+# --------------------------------------------------
+
+if st.session_state.show_saved_projects:
+
+    st.divider()
+    st.header("📁 Saved Projects")
+
+    st.write(
+        "Projects hidden from the main workspace are available here."
+    )
+
+    if st.button("← Back to Main Workspace", key="back_to_workspace"):
+        st.session_state.show_saved_projects = False
+        st.rerun()
+
+    hidden_projects = get_hidden_projects()
+
+    st.write(f"**Total Saved Projects: {len(hidden_projects)}**")
+
+    if hidden_projects:
+
+        for project in hidden_projects:
+
+            with st.container(border=True):
+
+                col1, col2 = st.columns([4, 1])
+
+                with col1:
+                    st.subheader(project["project_name"])
+
+                    st.caption(
+                        project.get("project_description", "")
+                    )
+
+                    st.write(
+                        "Language:",
+                        project.get("programming_language", "Not specified")
+                    )
+
+                    st.caption(
+                        "Project Path: "
+                        + str(project.get("project_path", "Not available"))
+                    )
+
+                with col2:
+                    if st.button(
+                        "Restore",
+                        key=f"restore_project_{project['id']}",
+                        use_container_width=True
+                    ):
+                        restore_project(project["id"])
+
+                        st.success(
+                            f"{project['project_name']} restored successfully!"
+                        )
+
+                        st.rerun()
+
+    else:
+        st.info(
+            "No hidden projects found. "
+            "Click × beside a project in the main workspace to save it here."
+        )
 
 
 st.divider()

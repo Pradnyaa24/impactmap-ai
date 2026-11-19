@@ -9,3 +9,8 @@ impactmap_build/
 impactmap_db_backup.sql
 *.sql
 uploaded_projects/
+
+# Local backup and demo files
+app_backup.py
+external_demo/
+external_demo.zip

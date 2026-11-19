@@ -11,12 +11,30 @@ import urllib.error
 
 from dotenv import load_dotenv
 
+def get_github_token():
+    """
+    Read GitHub token from Streamlit Cloud secrets first,
+    then fall back to the local .env file.
+    """
+
+    token = None
+
+    try:
+        import streamlit as st
+        token = st.secrets.get("GITHUB_TOKEN")
+    except Exception:
+        token = None
+
+    if not token:
+        token = os.getenv("GITHUB_TOKEN")
+
+    return str(token).strip() if token else ""
 
 load_dotenv()
 
 GITHUB_OWNER = "Pradnyaa24"
 GITHUB_REPO = "impactmap-ai"
-WORKFLOW_FILE = "cpp-tests.yml"
+WORKFLOW_FILE = "external-cpp-tests.yml"
 BRANCH = "main"
 
 API_BASE = (
@@ -537,7 +555,7 @@ def run_github_cpp_tests(
         }
     """
 
-    token = os.getenv("GITHUB_TOKEN")
+    token = get_github_token()
 
     if not token:
         return {

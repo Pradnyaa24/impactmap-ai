@@ -41,6 +41,46 @@ def create_project(
         connection.close()
 
 
+# Get only visible projects for the main workspace
+def get_active_projects():
+    connection = get_connection()
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT *
+                FROM projects
+                WHERE is_hidden = 0
+                ORDER BY id DESC
+            """)
+
+            return cursor.fetchall()
+
+    finally:
+        connection.close()
+
+
+# Get only hidden projects for the Saved Projects section
+def get_hidden_projects():
+    connection = get_connection()
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT *
+                FROM projects
+                WHERE is_hidden = 1
+                ORDER BY id DESC
+            """)
+
+            return cursor.fetchall()
+
+    finally:
+        connection.close()
+
+
+# Get all projects, including hidden projects
+# Kept for compatibility with existing code
 def get_all_projects():
     connection = get_connection()
 
@@ -49,7 +89,46 @@ def get_all_projects():
             cursor.execute(
                 "SELECT * FROM projects ORDER BY id DESC"
             )
+
             return cursor.fetchall()
+
+    finally:
+        connection.close()
+
+
+# Hide a project without deleting its database record
+def hide_project(project_id):
+    connection = get_connection()
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                UPDATE projects
+                SET is_hidden = 1
+                WHERE id = %s
+            """, (project_id,))
+
+        connection.commit()
+        return True
+
+    finally:
+        connection.close()
+
+
+# Restore a hidden project
+def restore_project(project_id):
+    connection = get_connection()
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                UPDATE projects
+                SET is_hidden = 0
+                WHERE id = %s
+            """, (project_id,))
+
+        connection.commit()
+        return True
 
     finally:
         connection.close()
