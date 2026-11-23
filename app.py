@@ -968,9 +968,6 @@ if cpp_projects:
         )
 
     st.subheader("Manual Test Case Suggestions")
-    st.caption(
-        "Enter C++ test setup and boolean conditions to verify. ImpactMap wraps these in assertions; it does not guess expected results or use Ollama."
-    )
     manual_setup = st.text_area(
         "Test setup (C++ statements)",
         value="",
