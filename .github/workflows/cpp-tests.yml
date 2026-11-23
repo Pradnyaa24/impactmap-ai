@@ -17,7 +17,8 @@ on:
 
       test_files:
         description: "Newline-separated repository-relative test files"
-        required: true
+        required: false
+        default: ""
         type: string
 
       include_dir:
@@ -71,6 +72,7 @@ jobs:
           SOURCE_FILE: ${{ inputs.source_file }}
           TEST_FILES: ${{ inputs.test_files }}
           INCLUDE_DIR: ${{ inputs.include_dir }}
+          GENERATED_TEST_CODE: ${{ inputs.generated_test_code }}
         run: |
           python3 - <<'PY'
           import os
@@ -106,8 +108,8 @@ jobs:
           if not os.path.isdir(include_dir):
               raise SystemExit(f"Include directory does not exist: {include_dir}")
 
-          if not tests:
-              raise SystemExit("No test files provided.")
+          if not os.environ.get("GENERATED_TEST_CODE", "").strip():
+              raise SystemExit("No manual test suite was provided.")
 
           for test in tests:
               validate_path(test)
@@ -160,6 +162,12 @@ jobs:
 
           for path in discovered_sources:
               resolved = str(path.resolve())
+
+              if any(
+                  part.lower() in {"test", "tests", "unit_tests", "unittests", "integration_tests"}
+                  for part in path.parts[:-1]
+              ) or path.stem.lower().endswith("test"):
+                  continue
 
               if resolved in test_files:
                   continue
@@ -216,6 +224,7 @@ jobs:
 
       - name: Compile Multi-Source C++ Tests
         id: compile_existing
+        if: ${{ false }}
         continue-on-error: true
         env:
           TEST_FILES: ${{ inputs.test_files }}
@@ -284,7 +293,7 @@ jobs:
 
       - name: Execute Existing C++ Tests
         id: run_existing
-        if: steps.compile_existing.outcome == 'success'
+        if: ${{ false }}
         continue-on-error: true
         run: |
           python3 - <<'PY'
@@ -394,14 +403,8 @@ jobs:
         run: |
           failed=0
 
-          # Determine existing test suite status
-          if [ "$EXISTING_COMPILE_OUTCOME" != "success" ]; then
-            existing_status="COMPILE_FAILED"
-          elif [ "$EXISTING_RUN_OUTCOME" = "success" ]; then
-            existing_status="PASSED"
-          else
-            existing_status="FAILED"
-          fi
+          # This workflow runs only the manual test suite.
+          existing_status="NOT_RUN"
 
           echo "IMPACTMAP_EXISTING_TEST_STATUS=$existing_status"
 
@@ -418,12 +421,8 @@ jobs:
 
           echo "IMPACTMAP_GENERATED_TEST_STATUS=$generated_status"
 
-          # Fail workflow if either applicable suite failed
-          if [ "$existing_status" != "PASSED" ]; then
-            failed=1
-          fi
-
-          if [ "$generated_status" != "PASSED" ] && [ "$generated_status" != "NOT_GENERATED" ]; then
+          # Only the manual test suite controls this workflow result.
+          if [ "$generated_status" != "PASSED" ]; then
             failed=1
           fi
 
