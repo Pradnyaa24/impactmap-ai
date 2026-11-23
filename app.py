@@ -23,7 +23,7 @@ from modules.mcp_client import (
 from modules.dependency_visualizer import create_dependency_graph
 from modules.llm_explainer import generate_impact_explanation
 from modules.risk_analyzer import calculate_change_risk
-from modules.test_case_generator import generate_cpp_test_suite
+from modules.manual_test_generator import build_manual_test_suite
 
 # --------------------------------------------------
 # PROJECT PATH CONFIGURATION
@@ -967,20 +967,34 @@ if cpp_projects:
             )
         )
 
-    business_requirements = st.text_area(
-        "📋 Business Requirements for Generated Tests",
-        placeholder=(
-            "Example: HRA = 20%, DA = 10%. Total salary = "
-            "basic salary + HRA + DA + bonus."
-        ),
-        height=90,
-        help=(
-            "For the first version, enter explicit HRA and DA percentages. "
-            "Expected results are generated from these requirements, not guessed."
-        )
+    st.subheader("Manual Test Case Suggestions")
+    st.caption(
+        "Enter C++ test setup and boolean conditions to verify. ImpactMap wraps these in assertions; it does not guess expected results or use Ollama."
     )
+    manual_setup = st.text_area(
+        "Test setup (C++ statements)",
+        value="",
+        height=80,
+        help="For Salary::calculateSalary, use `Salary salary;`. Leave blank for free functions or static methods.",
+        key=f"manual_test_setup_{selected_project['id']}_{selected_source_file}",
+    )
+    manual_case_count = st.number_input(
+        "Number of test case slots", min_value=1, max_value=10, value=3, step=1,
+        key=f"manual_test_count_{selected_project['id']}_{selected_source_file}",
+    )
+    manual_cases = []
+    for case_index in range(int(manual_case_count)):
+        case_name = st.text_input(
+            f"Test case {case_index + 1} name", value=f"Case {case_index + 1}",
+            key=f"manual_test_name_{selected_project['id']}_{selected_source_file}_{case_index}",
+        )
+        case_condition = st.text_input(
+            f"Test case {case_index + 1} condition",
+            placeholder="salary.calculateSalary(30000, 5000) == 45500",
+            key=f"manual_test_condition_{selected_project['id']}_{selected_source_file}_{case_index}",
+        )
+        manual_cases.append({"name": case_name, "condition": case_condition})
 
-    # --------------------------------------------------
     # --------------------------------------------------
     # UNIFIED ANALYSIS BUTTON
     # --------------------------------------------------
@@ -1027,12 +1041,11 @@ if cpp_projects:
                         modified_code
                     )
 
-                    generated_test_suite = generate_cpp_test_suite(
-                        original_code=original_code,
-                        modified_code=modified_code,
-                        function_name=changed_function.strip(),
-                        requirements=business_requirements,
-                        project_path=project_path
+                    generated_test_suite = build_manual_test_suite(
+                        project_path=project_path,
+                        source_file=selected_source_file,
+                        setup_code=manual_setup,
+                        cases=manual_cases,
                     )
 
                 st.success("Code comparison completed!")
@@ -1141,16 +1154,20 @@ if cpp_projects:
                         st.info("No differences found.")
 
                 # --------------------------------------------------
-                # AUTOMATIC TEST CASE GENERATION
+                # MANUAL TEST CASE SUGGESTIONS
                 # --------------------------------------------------
 
-                st.subheader("🧪 Automatic Test Case Generation")
+                st.subheader("Manual Test Case Suggestions")
 
-                if generated_test_suite["supported"]:
+                if (
+                    generated_test_suite.get("supported")
+                    and generated_test_suite.get("code", "").strip()
+                    and generated_test_suite.get("test_cases")
+                ):
 
                     st.success(
                         f"Generated {len(generated_test_suite['test_cases'])} "
-                        "requirement-based C++ test cases."
+                        "manual C++ test cases."
                     )
 
                     # Display salary rules only for salary-based generators.
@@ -1217,14 +1234,13 @@ if cpp_projects:
                             )
 
                     st.caption(
-                        "Generated tests are based on the supplied business "
-                        "requirements and the detected C++ function."
+                        "The assertions use the conditions you entered. The app does not infer expected results or call Ollama for test generation."
                     )
 
                 else:
 
                     st.warning(
-                        generated_test_suite.get(
+                            generated_test_suite.get(
                             "reason",
                             "Test generation is not supported for this function."
                         )
@@ -1354,7 +1370,8 @@ if cpp_projects:
 
                         st.write("**Selected Project:**", selected_project["project_name"])
                         st.write("**External Source File:**", os.path.relpath(external_source, project_root).replace("\\", "/"))
-                        st.write("**Existing Test Files:**", len(external_tests))
+                        external_tests = []
+                        st.write("**Existing Test Files Executed:**", 0)
 
 
                         # Preserve the rest of the selected source file when the editor
@@ -1401,7 +1418,9 @@ if cpp_projects:
                                 project_name=selected_project["project_name"],
                                 generated_test_code=(
                                     generated_test_suite["code"]
-                                    if generated_test_suite["supported"]
+                                    if generated_test_suite.get("supported")
+                                    and generated_test_suite.get("code", "").strip()
+                                    and generated_test_suite.get("test_cases")
                                     else ""
                                 )
                             )
@@ -1514,12 +1533,9 @@ if cpp_projects:
                             dict.fromkeys(resolved_test_files)
                         )
 
-                        if not resolved_test_files:
-
-                            raise ValueError(
-                                "No valid C++ test files were found. "
-                                "Please check MCP test_files."
-                            )
+                        # Existing project tests are intentionally excluded from
+                        # GitHub execution; only the manual assertion suite runs.
+                        resolved_test_files = []
 
                         # --------------------------------------------------
                         # FIND INCLUDE DIRECTORY
@@ -1633,13 +1649,42 @@ if cpp_projects:
                             github_include_dir
                         )
 
-                        st.write("**Related Test Files:**")
+                        st.info(
+                            "GitHub Actions will run only the manual test cases entered above."
+                        )
 
                         for test_file in github_test_files:
 
                             st.write("📄", test_file)
 
                         # --------------------------------------------------
+                        # The editor normally contains only the selected
+                        # function. GitHub replaces the complete source file,
+                        # so preserve includes and unrelated definitions here.
+                        source_text = Path(source_file).read_text(
+                            encoding="utf-8",
+                            errors="replace"
+                        )
+                        original_fragment = (original_code or "").strip()
+                        modified_fragment = (modified_code or "").strip()
+
+                        if original_fragment == modified_fragment:
+                            proposed_source_code = source_text
+                        elif original_fragment and original_fragment in source_text:
+                            proposed_source_code = source_text.replace(
+                                original_fragment,
+                                modified_fragment,
+                                1
+                            )
+                        elif modified_fragment.startswith(("#include", "//", "/*")):
+                            proposed_source_code = modified_fragment
+                        else:
+                            raise ValueError(
+                                "Could not safely locate the original function "
+                                "inside the selected source file. Check that "
+                                "Original Code matches the current function."
+                            )
+
                         # SUBMIT TO GITHUB ACTIONS
                         # --------------------------------------------------
 
@@ -1648,14 +1693,16 @@ if cpp_projects:
                         ):
 
                             test_result = run_github_cpp_tests(
-                                proposed_code=modified_code,
+                                proposed_code=proposed_source_code,
                                 source_file=github_source_file,
                                 test_files=github_test_files,
                                 include_dir=github_include_dir,
                                 project_name=selected_project["project_name"],
                                 generated_test_code=(
                                     generated_test_suite["code"]
-                                    if generated_test_suite["supported"]
+                                    if generated_test_suite.get("supported")
+                                    and generated_test_suite.get("code", "").strip()
+                                    and generated_test_suite.get("test_cases")
                                     else ""
                                 )
                             )
@@ -1743,10 +1790,21 @@ if cpp_projects:
                     "generated_test_status",
                     (
                         "NOT_GENERATED"
-                        if not generated_test_suite["supported"]
+                        if not (
+                            generated_test_suite.get("supported")
+                            and generated_test_suite.get("code", "").strip()
+                            and generated_test_suite.get("test_cases")
+                        )
                         else "UNKNOWN"
                     )
                 )
+
+                if not (
+                    generated_test_suite.get("supported")
+                    and generated_test_suite.get("code", "").strip()
+                    and generated_test_suite.get("test_cases")
+                ):
+                    generated_test_status = "NOT_GENERATED"
 
                 # Fallback when individual status is unavailable
                 if existing_test_status == "UNKNOWN":
@@ -1780,18 +1838,13 @@ if cpp_projects:
                 )
 
                 col3.metric(
-                    "Related Test Files",
+                    "Related Test Files (analysis only)",
                     risk_result["test_file_count"]
                 )
 
                 col4.metric(
                     "Test Risk Points",
                     risk_result["test_risk_points"]
-                )
-
-                st.write(
-                    "**Automated Test Status:**",
-                    risk_result["test_status"]
                 )
 
                 if risk_result["generated_test_count"] > 0:

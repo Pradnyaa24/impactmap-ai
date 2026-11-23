@@ -34,7 +34,7 @@ load_dotenv()
 
 GITHUB_OWNER = "Pradnyaa24"
 GITHUB_REPO = "impactmap-ai"
-WORKFLOW_FILE = "external-cpp-tests.yml"
+WORKFLOW_FILE = "cpp-tests.yml"
 BRANCH = "main"
 
 API_BASE = (
@@ -299,12 +299,12 @@ def extract_test_statuses(log_text):
 
     existing_pattern = (
         r"IMPACTMAP_EXISTING_TEST_STATUS="
-        r"(PASSED_OR_NOT_AVAILABLE|NOT_AVAILABLE|PASSED|FAILED|COMPILE_FAILED)"
+        r"(PASSED_OR_NOT_AVAILABLE|NOT_AVAILABLE|NOT_RUN|PASSED|FAILED|COMPILE_FAILED)"
     )
 
     generated_pattern = (
         r"IMPACTMAP_GENERATED_TEST_STATUS="
-        r"(PASSED|FAILED|COMPILE_FAILED|NOT_GENERATED)"
+        r"(PASSED|FAILED|COMPILE_FAILED|NOT_GENERATED|COMPILE_TIMEOUT|EXECUTION_TIMEOUT)"
     )
 
     existing_matches = re.findall(
@@ -589,9 +589,7 @@ def run_github_cpp_tests(
         )
 
         if test_files is None:
-            test_files = [
-                "sample_projects/EmployeeManagementSystem/tests/SalaryTest.cpp"
-            ]
+            test_files = []
 
         if isinstance(test_files, str):
             test_files = [
@@ -599,11 +597,6 @@ def run_github_cpp_tests(
                 for path in test_files.splitlines()
                 if path.strip()
             ]
-
-        if not test_files:
-            raise ValueError(
-                "At least one C++ test file is required."
-            )
 
         test_files = [
             validate_repo_path(path, "Test file")
@@ -618,6 +611,16 @@ def run_github_cpp_tests(
         if not project_name or not project_name.strip():
             raise ValueError(
                 "Project name cannot be empty."
+            )
+
+        if not generated_test_code or not generated_test_code.strip():
+            raise ValueError(
+                "Enter at least one manual test condition before running GitHub Actions."
+            )
+
+        if not re.search(r"\bint\s+main\s*\(", generated_test_code) or not re.search(r"\bassert\s*\(", generated_test_code):
+            raise ValueError(
+                "Manual test code must contain a main() function and at least one assertion."
             )
 
         if generated_test_code and len(generated_test_code) > 30000:
@@ -708,7 +711,7 @@ def run_github_cpp_tests(
 
                         return {
                             "status": "PASSED",
-                            "existing_test_status": "PASSED",
+                            "existing_test_status": "NOT_RUN",
                             "generated_test_status": (
                                 "PASSED" if generated_test_code
                                 else "NOT_GENERATED"

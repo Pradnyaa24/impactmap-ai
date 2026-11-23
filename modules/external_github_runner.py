@@ -16,16 +16,29 @@ from modules.github_actions_runner import (
     github_request,
     get_failed_job_details,
     extract_test_statuses,
+    get_github_token,
 )
 
 load_dotenv()
 
 MAX_UPLOAD_BYTES = 90 * 1024 * 1024
+
 IGNORED_DIRS = {
     ".git", ".svn", ".hg", "venv", "venv312", ".venv",
     "__pycache__", "node_modules", "build", "cmake-build-debug",
     "cmake-build-release", "dist", ".idea", ".vs",
 }
+
+IGNORED_FILES = {
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.development",
+    "secrets.toml",
+    "id_rsa",
+    "id_ed25519",
+}
+
 
 
 def _make_project_zip(project_root):
@@ -44,6 +57,13 @@ def _make_project_zip(project_root):
             relative = path.relative_to(root)
             if any(part in IGNORED_DIRS for part in relative.parts):
                 continue
+
+            if path.name.lower() in {name.lower() for name in IGNORED_FILES}:
+                continue
+
+            if path.name.lower().endswith((".key", ".p12", ".pfx")):
+                continue
+
             if path.is_symlink():
                 continue
             size = path.stat().st_size
@@ -118,9 +138,22 @@ def run_external_cpp_tests(
     poll_interval=5,
 ):
     """Package an external project, upload it as a temporary release asset and run it."""
-    token = os.getenv("GITHUB_TOKEN")
+    token = get_github_token()
     if not token:
-        return {"status": "ERROR", "message": "GITHUB_TOKEN is missing from .env.", "run_url": None}
+         raise RuntimeError(
+        "GitHub token is not configured. "
+        "Configure GITHUB_TOKEN or IMPACTMAP_GITHUB_TOKEN."
+    )
+
+    if not generated_test_code or not generated_test_code.strip():
+        raise ValueError(
+            "Enter at least one manual test condition before running GitHub Actions."
+        )
+
+    if "int main(" not in generated_test_code or "assert(" not in generated_test_code:
+        raise ValueError(
+            "Manual test code must contain a main() function and at least one assertion."
+        )
 
     release_id = None
     request_id = uuid.uuid4().hex
@@ -134,34 +167,39 @@ def run_external_cpp_tests(
     else:
         tests = list(test_files or [])
 
+
     try:
         root = Path(project_root).resolve()
-        source = Path(source_file)
-        if source.is_absolute():
-            source = source.resolve().relative_to(root)
-        source = source.as_posix()
+
+        source = _safe_project_relative_path(root, source_file)
+
         if not source.lower().endswith((".cpp", ".cc", ".cxx")):
             raise ValueError("Selected source must be a C++ source file.")
+
         if not (root / source).is_file():
             raise ValueError(f"Selected source file does not exist: {source}")
 
         normalized_tests = []
+
         for item in tests:
-            candidate = Path(item)
-            if candidate.is_absolute():
-                candidate = candidate.resolve().relative_to(root)
-            candidate = candidate.as_posix()
-            if (root / candidate).is_file() and candidate.lower().endswith((".cpp", ".cc", ".cxx")):
+            candidate = _safe_project_relative_path(root, item)
+
+            if not candidate.lower().endswith((".cpp", ".cc", ".cxx")):
+                continue
+
+            if (root / candidate).is_file():
                 normalized_tests.append(candidate)
 
-        inc = Path(include_dir)
-        if inc.is_absolute():
-            inc = inc.resolve().relative_to(root)
-        inc = inc.as_posix()
-        if not (root / inc).is_dir():
-            inc = "."
+        inc = "."
+
+        if include_dir:
+            candidate_inc = _safe_project_relative_path(root, include_dir)
+
+            if (root / candidate_inc).is_dir():
+                inc = candidate_inc
 
         payload = _make_project_zip(root)
+
 
         release = github_request(
             f"{API_BASE}/releases",
@@ -231,8 +269,8 @@ def run_external_cpp_tests(
         conclusion = matching.get("conclusion")
         logs = get_failed_job_details(matching["id"], token) if conclusion != "success" else ""
         existing_status, generated_status = extract_test_statuses(logs) if logs else (
-            "PASSED" if normalized_tests else "NOT_AVAILABLE",
-            "PASSED" if generated_test_code else "NOT_GENERATED",
+            "NOT_RUN",
+            "UNKNOWN" if generated_test_code else "NOT_GENERATED",
         )
         github_request(f"{API_BASE}/releases/{release_id}", method="DELETE", token=token)
         release_id = None
@@ -266,3 +304,22 @@ def run_external_cpp_tests(
             "existing_test_status": "UNKNOWN",
             "generated_test_status": "UNKNOWN",
         }
+
+def _safe_project_relative_path(project_root, supplied_path):
+    """Resolve a supplied path and ensure it stays inside the project."""
+    root = Path(project_root).resolve()
+    candidate = Path(supplied_path)
+
+    if not candidate.is_absolute():
+        candidate = root / candidate
+
+    candidate = candidate.resolve()
+
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError:
+        raise ValueError(
+            f"Path is outside the uploaded project folder: {supplied_path}"
+        )
+
+    return relative.as_posix()
